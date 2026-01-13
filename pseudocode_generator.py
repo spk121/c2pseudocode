@@ -186,9 +186,47 @@ class PseudocodeGenerator(object):
         return s
 
     def visit_Typedef(self, n):
+        # For typedef of struct/union/enum, we want "TYPE name IS RECORD..."
+        # Check if the inner type is a struct/union/enum
+        if isinstance(n.type, pycparser.c_ast.TypeDecl):
+            inner_type = n.type.type
+            if isinstance(inner_type, (pycparser.c_ast.Struct, pycparser.c_ast.Union, pycparser.c_ast.Enum)):
+                # Generate the struct/union/enum with the typedef name
+                type_name = n.type.declname or n.name
+                if isinstance(inner_type, pycparser.c_ast.Struct):
+                    return self._generate_struct_union_enum_with_name(inner_type, 'struct', type_name)
+                elif isinstance(inner_type, pycparser.c_ast.Union):
+                    return self._generate_struct_union_enum_with_name(inner_type, 'union', type_name)
+                elif isinstance(inner_type, pycparser.c_ast.Enum):
+                    return self._generate_struct_union_enum_with_name(inner_type, 'enum', type_name)
+        
+        # Otherwise, fall back to standard handling
         s = ''
         if n.storage: s += ' '.join(n.storage) + ' '
         s += self._generate_type(n.type)
+        return s
+    
+    def _generate_struct_union_enum_with_name(self, n, name, type_name):
+        """ Generate struct/union/enum with an explicit type name (for typedef) """
+        if name in ('struct', 'union'):
+            members = n.decls
+            body_function = self._generate_struct_union_body
+            keyword = 'RECORD' if name == 'struct' else 'UNION'
+        else:
+            assert name == 'enum'
+            members = None if n.values is None else n.values.enumerators
+            body_function = self._generate_enum_body
+            keyword = 'ENUM'
+            
+        if members is not None:
+            s = 'TYPE ' + type_name + ' IS ' + keyword + '\n'
+            s += self._make_indent()
+            self.indent_level += 2
+            s += body_function(members)
+            self.indent_level -= 2
+            s += self._make_indent() + 'END ' + keyword
+        else:
+            s = 'TYPE ' + type_name + ' IS ' + keyword
         return s
 
     def visit_Cast(self, n):
@@ -341,12 +379,25 @@ class PseudocodeGenerator(object):
         return s
 
     def visit_For(self, n):
+        # Try to detect simple counting loops and make them more ADA-like
+        # Pattern: for (i = start; i < end; i++) or similar
+        init_str = self.visit(n.init) if n.init else ''
+        cond_str = self.visit(n.cond) if n.cond else ''
+        next_str = self.visit(n.next) if n.next else ''
+        
+        # Check if this is a simple counting loop
+        # We'll keep the C-style for now for clarity, but format it nicely
         s = 'FOR '
-        if n.init: s += self.visit(n.init)
-        s += ';'
-        if n.cond: s += ' ' + self.visit(n.cond)
-        s += ';'
-        if n.next: s += ' ' + self.visit(n.next)
+        if init_str:
+            # Remove semicolon from init if present
+            init_str = init_str.rstrip(';').strip()
+            s += init_str
+        s += '; '
+        if cond_str:
+            s += cond_str
+        s += '; '
+        if next_str:
+            s += next_str
         s += ' LOOP\n'
         s += self._generate_stmt(n.stmt, add_indent=True)
         s += self._make_indent() +'END LOOP'
@@ -447,21 +498,33 @@ class PseudocodeGenerator(object):
         if name in ('struct', 'union'):
             members = n.decls
             body_function = self._generate_struct_union_body
+            # Use ADA-style 'RECORD' instead of 'struct'
+            keyword = 'RECORD' if name == 'struct' else 'UNION'
         else:
             assert name == 'enum'
             members = None if n.values is None else n.values.enumerators
             body_function = self._generate_enum_body
-        s = name + ' ' + (n.name or '')
+            keyword = 'ENUM'
+            
+        type_name = n.name or ''
+        
         if members is not None:
             # None means no members
             # Empty sequence means an empty list of members
-            s += '\n'
+            if type_name:
+                s = 'TYPE ' + type_name + ' IS ' + keyword + '\n'
+            else:
+                s = keyword + '\n'
             s += self._make_indent()
             self.indent_level += 2
-            s += '{\n'
             s += body_function(members)
             self.indent_level -= 2
-            s += self._make_indent() + '}'
+            if type_name:
+                s += self._make_indent() + 'END ' + keyword
+            else:
+                s += self._make_indent() + 'END ' + keyword
+        else:
+            s = keyword + ' ' + type_name
         return s
 
     def _generate_struct_union_body(self, members):
