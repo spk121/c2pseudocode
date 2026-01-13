@@ -60,7 +60,9 @@ See [CONVERSION.md](CONVERSION.md) for complete conversion rules and examples.
 Example with unifdef:
 
 ```bash
-unifdef -DDEBUG=0 input.c | python3 c-to-pseudocode.py --no-cpp - > output.txt
+# Preprocess with unifdef, then convert the result
+unifdef -DDEBUG=0 input.c > preprocessed.c
+python3 c-to-pseudocode.py --no-cpp preprocessed.c -o output.txt
 ```
 
 ## License

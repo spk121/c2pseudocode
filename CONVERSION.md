@@ -48,7 +48,9 @@ python3 c-to-pseudocode.py input.c --no-cpp
 For production use, you may want to use `unifdef` to remove debug code first:
 
 ```bash
-unifdef -DDEBUG=0 input.c | python3 c-to-pseudocode.py --no-cpp - > output.txt
+# Preprocess with unifdef, then convert the result
+unifdef -DDEBUG=0 input.c > preprocessed.c
+python3 c-to-pseudocode.py --no-cpp preprocessed.c -o output.txt
 ```
 
 ## Conversion Rules

@@ -276,7 +276,6 @@ class PseudocodeGenerator(object):
     def visit_FuncDef(self, n):
         # Check if this is a function (returns non-void) or procedure (returns void)
         is_procedure = False
-        func_name = ''
         return_type = ''
         
         # Navigate the AST to find return type
@@ -291,7 +290,6 @@ class PseudocodeGenerator(object):
                         return_type = ' '.join(type_names)
                         if return_type in self.TYPE_MAPPINGS:
                             return_type = self.TYPE_MAPPINGS[return_type]
-                    func_name = n.decl.type.type.declname
                     
         decl_str = self.visit(n.decl)
         
@@ -387,14 +385,19 @@ class PseudocodeGenerator(object):
         return s
 
     def visit_For(self, n):
-        # Try to detect simple counting loops and make them more ADA-like
+        # Try to detect simple counting loops and make them more readable
         # Pattern: for (i = start; i < end; i++) or similar
+        
+        # Try to parse as a simple counting loop
+        simple_loop = self._try_parse_counting_loop(n)
+        if simple_loop:
+            return simple_loop
+        
+        # Otherwise, use C-style for loop format
         init_str = self.visit(n.init) if n.init else ''
         cond_str = self.visit(n.cond) if n.cond else ''
         next_str = self.visit(n.next) if n.next else ''
         
-        # Check if this is a simple counting loop
-        # We'll keep the C-style for now for clarity, but format it nicely
         s = 'FOR '
         if init_str:
             # Remove semicolon from init if present
@@ -408,7 +411,117 @@ class PseudocodeGenerator(object):
             s += next_str
         s += ' LOOP\n'
         s += self._generate_stmt(n.stmt, add_indent=True)
-        s += self._make_indent() +'END LOOP'
+        s += self._make_indent() + 'END LOOP\n'
+        return s
+    
+    def _try_parse_counting_loop(self, n):
+        """Try to parse a for loop as a simple counting loop.
+        Returns formatted string if successful, None otherwise.
+        
+        Detects patterns like:
+        - for (i = start; i < end; i++)
+        - for (i = start; i <= end; i++)
+        - for (i = start; i > end; i--)
+        - for (i = start; i >= end; i--)
+        With optional step values (i += 2, i -= 3, etc.)
+        """
+        if not n.init or not n.cond or not n.next:
+            return None
+        
+        # Parse init: should be an assignment like "i = 0" or "int i = 0"
+        loop_var = None
+        start_val = None
+        
+        if isinstance(n.init, pycparser.c_ast.Assignment):
+            if isinstance(n.init.lvalue, pycparser.c_ast.ID):
+                loop_var = n.init.lvalue.name
+                start_val = self.visit(n.init.rvalue)
+        elif isinstance(n.init, pycparser.c_ast.DeclList) and len(n.init.decls) == 1:
+            decl = n.init.decls[0]
+            if decl.init and isinstance(decl, pycparser.c_ast.Decl):
+                loop_var = decl.name
+                start_val = self.visit(decl.init)
+        
+        if not loop_var or not start_val:
+            return None
+        
+        # Parse condition: should be like "i < end" or "i <= end" or "i > end" or "i >= end"
+        end_val = None
+        inclusive = False
+        ascending = True
+        
+        if isinstance(n.cond, pycparser.c_ast.BinaryOp):
+            if isinstance(n.cond.left, pycparser.c_ast.ID) and n.cond.left.name == loop_var:
+                end_val = self.visit(n.cond.right)
+                if n.cond.op == '<':
+                    inclusive = False
+                    ascending = True
+                elif n.cond.op == '<=':
+                    inclusive = True
+                    ascending = True
+                elif n.cond.op == '>':
+                    inclusive = False
+                    ascending = False
+                elif n.cond.op == '>=':
+                    inclusive = True
+                    ascending = False
+                else:
+                    return None
+        
+        if not end_val:
+            return None
+        
+        # Parse next: should be i++ or i-- or i += step or i -= step
+        step = None
+        step_ascending = True
+        
+        if isinstance(n.next, pycparser.c_ast.UnaryOp):
+            if isinstance(n.next.expr, pycparser.c_ast.ID) and n.next.expr.name == loop_var:
+                if n.next.op in ['p++', '++']:
+                    step = '1'
+                    step_ascending = True
+                elif n.next.op in ['p--', '--']:
+                    step = '1'
+                    step_ascending = False
+                else:
+                    return None
+        elif isinstance(n.next, pycparser.c_ast.Assignment):
+            if isinstance(n.next.lvalue, pycparser.c_ast.ID) and n.next.lvalue.name == loop_var:
+                if n.next.op == '+=':
+                    step = self.visit(n.next.rvalue)
+                    step_ascending = True
+                elif n.next.op == '-=':
+                    step = self.visit(n.next.rvalue)
+                    step_ascending = False
+                else:
+                    return None
+        
+        if step is None:
+            return None
+        
+        # Verify consistency
+        if ascending != step_ascending:
+            return None
+        
+        # Generate the simplified loop
+        s = 'FOR ' + loop_var + ' IN RANGE '
+        
+        # Choose bracket notation based on inclusivity
+        if ascending:
+            s += '[' + start_val + ', ' + end_val
+            s += ']' if inclusive else ')'
+        else:
+            # For descending loops, swap order
+            s += '(' if inclusive else '['
+            s += end_val + ', ' + start_val + ']'
+        
+        # Add step if not 1
+        if step != '1':
+            s += ' STEP ' + step
+        
+        s += ' LOOP\n'
+        s += self._generate_stmt(n.stmt, add_indent=True)
+        s += self._make_indent() + 'END LOOP\n'
         return s
 
     def visit_While(self, n):
@@ -416,7 +529,7 @@ class PseudocodeGenerator(object):
         if n.cond: s += self.visit(n.cond)
         s += ' LOOP\n'
         s += self._generate_stmt(n.stmt, add_indent=True)
-        s += self._make_indent() + 'END LOOP'
+        s += self._make_indent() + 'END LOOP\n'
         return s
 
     def visit_DoWhile(self, n):
@@ -425,7 +538,7 @@ class PseudocodeGenerator(object):
         s += self._make_indent() + 'EXIT WHEN NOT ('
         if n.cond: s += self.visit(n.cond)
         s += ')\n'
-        s += self._make_indent() + 'END LOOP'
+        s += self._make_indent() + 'END LOOP\n'
         return s
 
     def visit_StaticAssert(self, n):
@@ -440,7 +553,7 @@ class PseudocodeGenerator(object):
     def visit_Switch(self, n):
         s = 'CASE ' + self.visit(n.cond) + ' IS\n'
         s += self._generate_stmt(n.stmt, add_indent=True)
-        s += self._make_indent() + 'END CASE'
+        s += self._make_indent() + 'END CASE\n'
         return s
 
     def visit_Case(self, n):
