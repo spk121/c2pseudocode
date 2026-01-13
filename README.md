@@ -6,6 +6,8 @@ Once upon a time, I was asked to generate pseudocode for a DO-178C Software Desi
 
 It takes a C file and generates a sort of ADA-like pseudocode. ADA-like pseudocode is well understood in the USA Aerospace industry, at least among the greyhairs.
 
+This project also includes a version of `unifdef` written by Tony Finch.
+
 ## Quick Start
 
 ```bash

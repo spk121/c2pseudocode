@@ -232,7 +232,7 @@ class PseudocodeGenerator(object):
             self.indent_level += 2
             s += body_function(members)
             self.indent_level -= 2
-            s += self._make_indent() + 'END ' + keyword
+            s += self._make_indent() + 'END ' + keyword + '\n'
         else:
             s = 'TYPE ' + type_name + ' IS ' + keyword
         return s
@@ -333,6 +333,11 @@ class PseudocodeGenerator(object):
             if isinstance(ext, pycparser.c_ast.FuncDef):
                 s += self.visit(ext)
             elif isinstance(ext, pycparser.c_ast.Pragma):
+                s += self.visit(ext) + '\n'
+            elif isinstance(ext, pycparser.c_ast.Decl):
+                # Skip forward declarations (function declarations without bodies)
+                if isinstance(ext.type, pycparser.c_ast.FuncDecl):
+                    continue
                 s += self.visit(ext) + '\n'
             else:
                 s += self.visit(ext) + '\n'
@@ -640,7 +645,7 @@ class PseudocodeGenerator(object):
             self.indent_level += 2
             s += body_function(members)
             self.indent_level -= 2
-            s += self._make_indent() + 'END ' + keyword
+            s += self._make_indent() + 'END ' + keyword + '\n'
         else:
             s = keyword + ' ' + type_name
         return s
