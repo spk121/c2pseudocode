@@ -23,11 +23,14 @@ pip install pycparser
 ### Command Line Usage
 
 ```bash
-# Convert a C file (shows everything including system headers)
+# After installation, use the c2pseudocode command
 c2pseudocode input.c
 
 # Or run as a module
 python3 -m c2pseudocode input.c
+
+# Or use the standalone script (no installation required)
+./c2pseudocode.sh input.c
 
 # Convert only the code from your file (recommended for most cases)
 c2pseudocode input.c --only-from-file -o output.txt
@@ -192,8 +195,10 @@ c2pseudocode/
 │   └── pseudocode_generator.py  # AST visitor for code generation
 ├── tests/                   # Test suite
 │   ├── fixtures/            # Test C files
-│   └── test_conversion.py   # Pytest test cases
+│   ├── test_conversion.py   # Integration tests
+│   └── test_grammar.py      # Grammar unit tests
 ├── tools/unifdef/           # unifdef utility (separate C program)
+├── c2pseudocode.sh          # Standalone script (no installation needed)
 ├── pyproject.toml           # Modern Python packaging configuration
 ├── requirements.txt         # Runtime dependencies
 └── README.md                # This file
