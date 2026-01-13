@@ -14,6 +14,14 @@ class PseudocodeGenerator(object):
         return a value from each visit method, using string accumulation in
         generic_visit.
     """
+    
+    # Type name mappings from C to pseudocode
+    TYPE_MAPPINGS = {
+        'int': 'Integer',
+        'char': 'String',
+        'double': 'Float64'
+    }
+    
     def __init__(self, reduce_parentheses=False):
         """ Constructs C-code generator
 
@@ -72,17 +80,13 @@ class PseudocodeGenerator(object):
         else:
             operand = self._parenthesize_unless_simple(n.expr)
             if n.op == 'p++':
-                # return '%s++' % operand
-                return operand + ' = ' + operand + ' + 1'
+                return operand + ' := ' + operand + ' + 1'
             elif n.op == '++':
-                # return '%s%s' % (n.op, operand)
-                return operand + ' = ' + operand + ' + 1'
+                return operand + ' := ' + operand + ' + 1'
             elif n.op == 'p--':
-                # return '%s--' % operand
-                return operand + ' = ' + operand + ' - 1'
+                return operand + ' := ' + operand + ' - 1'
             elif n.op == '--':
-                # return '%s%s' % (n.op, operand)
-                return operand + ' = ' + operand + ' - 1'
+                return operand + ' := ' + operand + ' - 1'
             elif n.op == '!':
                 return 'NOT ' + operand
             else:
@@ -137,9 +141,9 @@ class PseudocodeGenerator(object):
         elif n.op == '||':
             op = 'OR'
         elif n.op == '==':
-            op = 'EQUAL'
+            op = 'EQUALS'
         elif n.op == '!=':
-            op = 'NOTEQUAL'
+            op = 'NOT EQUALS'
         return '%s %s %s' % (lval_str, op, rval_str)
 
     def visit_Assignment(self, n):
@@ -147,13 +151,15 @@ class PseudocodeGenerator(object):
                             n.rvalue,
                             lambda n: isinstance(n, pycparser.c_ast.Assignment))
         if n.op == '+=':
-            return '%s = %s + %s' % (self.visit(n.lvalue), self.visit(n.lvalue), rval_str)
+            return '%s := %s + %s' % (self.visit(n.lvalue), self.visit(n.lvalue), rval_str)
         elif n.op == '-=':
-            return '%s = %s * %s' % (self.visit(n.lvalue), self.visit(n.lvalue), rval_str)
+            return '%s := %s - %s' % (self.visit(n.lvalue), self.visit(n.lvalue), rval_str)
         elif n.op == '*=':
-            return '%s = %s * %s' % (self.visit(n.lvalue), self.visit(n.lvalue), rval_str)
+            return '%s := %s * %s' % (self.visit(n.lvalue), self.visit(n.lvalue), rval_str)
         elif n.op == '/=':
-            return '%s = %s / %s' % (self.visit(n.lvalue), self.visit(n.lvalue), rval_str)
+            return '%s := %s / %s' % (self.visit(n.lvalue), self.visit(n.lvalue), rval_str)
+        elif n.op == '=':
+            return '%s := %s' % (self.visit(n.lvalue), rval_str)
             
         return '%s %s %s' % (self.visit(n.lvalue), n.op, rval_str)
 
@@ -188,9 +194,47 @@ class PseudocodeGenerator(object):
         return s
 
     def visit_Typedef(self, n):
+        # For typedef of struct/union/enum, we want "TYPE name IS RECORD..."
+        # Check if the inner type is a struct/union/enum
+        if isinstance(n.type, pycparser.c_ast.TypeDecl):
+            inner_type = n.type.type
+            if isinstance(inner_type, (pycparser.c_ast.Struct, pycparser.c_ast.Union, pycparser.c_ast.Enum)):
+                # Generate the struct/union/enum with the typedef name
+                type_name = n.type.declname or n.name
+                if isinstance(inner_type, pycparser.c_ast.Struct):
+                    return self._generate_struct_union_enum_with_name(inner_type, 'struct', type_name)
+                elif isinstance(inner_type, pycparser.c_ast.Union):
+                    return self._generate_struct_union_enum_with_name(inner_type, 'union', type_name)
+                elif isinstance(inner_type, pycparser.c_ast.Enum):
+                    return self._generate_struct_union_enum_with_name(inner_type, 'enum', type_name)
+        
+        # Otherwise, fall back to standard handling
         s = ''
         if n.storage: s += ' '.join(n.storage) + ' '
         s += self._generate_type(n.type)
+        return s
+    
+    def _generate_struct_union_enum_with_name(self, n, name, type_name):
+        """ Generate struct/union/enum with an explicit type name (for typedef) """
+        if name in ('struct', 'union'):
+            members = n.decls
+            body_function = self._generate_struct_union_body
+            keyword = 'RECORD' if name == 'struct' else 'UNION'
+        else:
+            assert name == 'enum'
+            members = None if n.values is None else n.values.enumerators
+            body_function = self._generate_enum_body
+            keyword = 'ENUM'
+            
+        if members is not None:
+            s = 'TYPE ' + type_name + ' IS ' + keyword + '\n'
+            s += self._make_indent()
+            self.indent_level += 2
+            s += body_function(members)
+            self.indent_level -= 2
+            s += self._make_indent() + 'END ' + keyword
+        else:
+            s = 'TYPE ' + type_name + ' IS ' + keyword
         return s
 
     def visit_Cast(self, n):
@@ -230,14 +274,58 @@ class PseudocodeGenerator(object):
             )
 
     def visit_FuncDef(self, n):
-        decl = 'PROCEDURE ' + self.visit(n.decl) + ' IS'
+        # Check if this is a function (returns non-void) or procedure (returns void)
+        is_procedure = False
+        return_type = ''
+        
+        # Navigate the AST to find return type
+        if hasattr(n.decl, 'type') and isinstance(n.decl.type, pycparser.c_ast.FuncDecl):
+            if hasattr(n.decl.type, 'type') and isinstance(n.decl.type.type, pycparser.c_ast.TypeDecl):
+                if hasattr(n.decl.type.type, 'type') and isinstance(n.decl.type.type.type, pycparser.c_ast.IdentifierType):
+                    type_names = n.decl.type.type.type.names
+                    if type_names == ['void']:
+                        is_procedure = True
+                    else:
+                        # Get the return type for functions
+                        return_type = ' '.join(type_names)
+                        if return_type in self.TYPE_MAPPINGS:
+                            return_type = self.TYPE_MAPPINGS[return_type]
+                    
+        decl_str = self.visit(n.decl)
+        
+        # Parse the declaration to extract function name and parameters
+        # Format is typically: "name(params) : returntype"
+        if ' : ' in decl_str:
+            parts = decl_str.rsplit(' : ', 1)
+            if len(parts) == 2:
+                decl_str = parts[0]  # Keep only the name and parameters
+                ret_type_from_decl = parts[1].strip()
+                if ret_type_from_decl.lower() == 'void':
+                    is_procedure = True
+                    return_type = ''
+                else:
+                    return_type = ret_type_from_decl
+        
+        # Remove (void) parameters for cleaner output
+        decl_str = decl_str.replace('(void)', '()')
+        
+        if is_procedure:
+            decl = 'PROCEDURE ' + decl_str + ' IS'
+            func_type = 'PROCEDURE'
+        else:
+            decl = 'FUNCTION ' + decl_str
+            if return_type:
+                decl += ' RETURN ' + return_type
+            decl += ' IS'
+            func_type = 'FUNCTION'
+            
         self.indent_level = 0
         body = self.visit(n.body)
         if n.param_decls:
             knrdecls = ';\n'.join(self.visit(p) for p in n.param_decls)
-            return decl + '\n' + knrdecls + ';\n' + body + 'END PROCEDURE\n'
+            return decl + '\n' + knrdecls + ';\n' + body + 'END ' + func_type + '\n'
         else:
-            return decl + '\nBEGIN\n' + body + 'END PROCEDURE\n\n'
+            return decl + '\nBEGIN\n' + body + 'END ' + func_type + '\n\n'
 
     def visit_FileAST(self, n):
         s = ''
@@ -274,7 +362,7 @@ class PseudocodeGenerator(object):
         return s
 
     def visit_Break(self, n):
-        return 'BREAK'
+        return 'EXIT'
 
     def visit_Continue(self, n):
         return 'CONTINUE'
@@ -297,30 +385,160 @@ class PseudocodeGenerator(object):
         return s
 
     def visit_For(self, n):
+        # Try to detect simple counting loops and make them more readable
+        # Pattern: for (i = start; i < end; i++) or similar
+        
+        # Try to parse as a simple counting loop
+        simple_loop = self._try_parse_counting_loop(n)
+        if simple_loop:
+            return simple_loop
+        
+        # Otherwise, use C-style for loop format
+        init_str = self.visit(n.init) if n.init else ''
+        cond_str = self.visit(n.cond) if n.cond else ''
+        next_str = self.visit(n.next) if n.next else ''
+        
         s = 'FOR '
-        if n.init: s += self.visit(n.init)
-        s += ';'
-        if n.cond: s += ' ' + self.visit(n.cond)
-        s += ';'
-        if n.next: s += ' ' + self.visit(n.next)
+        if init_str:
+            # Remove semicolon from init if present
+            init_str = init_str.rstrip(';').strip()
+            s += init_str
+        s += '; '
+        if cond_str:
+            s += cond_str
+        s += '; '
+        if next_str:
+            s += next_str
         s += ' LOOP\n'
         s += self._generate_stmt(n.stmt, add_indent=True)
-        s += self._make_indent() +'END LOOP'
+        s += self._make_indent() + 'END LOOP\n'
+        return s
+    
+    def _try_parse_counting_loop(self, n):
+        """Try to parse a for loop as a simple counting loop.
+        Returns formatted string if successful, None otherwise.
+        
+        Detects patterns like:
+        - for (i = start; i < end; i++)
+        - for (i = start; i <= end; i++)
+        - for (i = start; i > end; i--)
+        - for (i = start; i >= end; i--)
+        With optional step values (i += 2, i -= 3, etc.)
+        """
+        if not n.init or not n.cond or not n.next:
+            return None
+        
+        # Parse init: should be an assignment like "i = 0" or "int i = 0"
+        loop_var = None
+        start_val = None
+        
+        if isinstance(n.init, pycparser.c_ast.Assignment):
+            if isinstance(n.init.lvalue, pycparser.c_ast.ID):
+                loop_var = n.init.lvalue.name
+                start_val = self.visit(n.init.rvalue)
+        elif isinstance(n.init, pycparser.c_ast.DeclList) and len(n.init.decls) == 1:
+            decl = n.init.decls[0]
+            if decl.init and isinstance(decl, pycparser.c_ast.Decl):
+                loop_var = decl.name
+                start_val = self.visit(decl.init)
+        
+        if not loop_var or not start_val:
+            return None
+        
+        # Parse condition: should be like "i < end" or "i <= end" or "i > end" or "i >= end"
+        end_val = None
+        inclusive = False
+        ascending = True
+        
+        if isinstance(n.cond, pycparser.c_ast.BinaryOp):
+            if isinstance(n.cond.left, pycparser.c_ast.ID) and n.cond.left.name == loop_var:
+                end_val = self.visit(n.cond.right)
+                if n.cond.op == '<':
+                    inclusive = False
+                    ascending = True
+                elif n.cond.op == '<=':
+                    inclusive = True
+                    ascending = True
+                elif n.cond.op == '>':
+                    inclusive = False
+                    ascending = False
+                elif n.cond.op == '>=':
+                    inclusive = True
+                    ascending = False
+                else:
+                    return None
+        
+        if not end_val:
+            return None
+        
+        # Parse next: should be i++ or i-- or i += step or i -= step
+        step = None
+        step_ascending = True
+        
+        if isinstance(n.next, pycparser.c_ast.UnaryOp):
+            if isinstance(n.next.expr, pycparser.c_ast.ID) and n.next.expr.name == loop_var:
+                if n.next.op in ['p++', '++']:
+                    step = '1'
+                    step_ascending = True
+                elif n.next.op in ['p--', '--']:
+                    step = '1'
+                    step_ascending = False
+                else:
+                    return None
+        elif isinstance(n.next, pycparser.c_ast.Assignment):
+            if isinstance(n.next.lvalue, pycparser.c_ast.ID) and n.next.lvalue.name == loop_var:
+                if n.next.op == '+=':
+                    step = self.visit(n.next.rvalue)
+                    step_ascending = True
+                elif n.next.op == '-=':
+                    step = self.visit(n.next.rvalue)
+                    step_ascending = False
+                else:
+                    return None
+        
+        if step is None:
+            return None
+        
+        # Verify consistency
+        if ascending != step_ascending:
+            return None
+        
+        # Generate the simplified loop
+        s = 'FOR ' + loop_var + ' IN RANGE '
+        
+        # Choose bracket notation based on inclusivity
+        if ascending:
+            s += '[' + start_val + ', ' + end_val
+            s += ']' if inclusive else ')'
+        else:
+            # For descending loops, swap order
+            s += '(' if inclusive else '['
+            s += end_val + ', ' + start_val + ']'
+        
+        # Add step if not 1
+        if step != '1':
+            s += ' STEP ' + step
+        
+        s += ' LOOP\n'
+        s += self._generate_stmt(n.stmt, add_indent=True)
+        s += self._make_indent() + 'END LOOP\n'
         return s
 
     def visit_While(self, n):
-        s = 'WHILE ('
+        s = 'WHILE '
         if n.cond: s += self.visit(n.cond)
-        s += ')\n'
+        s += ' LOOP\n'
         s += self._generate_stmt(n.stmt, add_indent=True)
+        s += self._make_indent() + 'END LOOP\n'
         return s
 
     def visit_DoWhile(self, n):
-        s = 'DO\n'
+        s = 'LOOP\n'
         s += self._generate_stmt(n.stmt, add_indent=True)
-        s += self._make_indent() + 'WHILE ('
+        s += self._make_indent() + 'EXIT WHEN NOT ('
         if n.cond: s += self.visit(n.cond)
-        s += ')'
+        s += ')\n'
+        s += self._make_indent() + 'END LOOP\n'
         return s
 
     def visit_StaticAssert(self, n):
@@ -333,20 +551,25 @@ class PseudocodeGenerator(object):
         return s
 
     def visit_Switch(self, n):
-        s = 'SWITCH ' + self.visit(n.cond) + '\n'
+        s = 'CASE ' + self.visit(n.cond) + ' IS\n'
         s += self._generate_stmt(n.stmt, add_indent=True)
+        s += self._make_indent() + 'END CASE\n'
         return s
 
     def visit_Case(self, n):
-        s = 'CASE ' + self.visit(n.expr) + ':\n'
+        s = 'WHEN ' + self.visit(n.expr) + ' =>\n'
         for stmt in n.stmts:
-            s += self._generate_stmt(stmt, add_indent=True)
+            # Skip BREAK statements in case blocks (not needed in ADA)
+            if not isinstance(stmt, pycparser.c_ast.Break):
+                s += self._generate_stmt(stmt, add_indent=True)
         return s
 
     def visit_Default(self, n):
-        s = 'DEFAULT:\n'
+        s = 'WHEN OTHERS =>\n'
         for stmt in n.stmts:
-            s += self._generate_stmt(stmt, add_indent=True)
+            # Skip BREAK statements in default blocks (not needed in ADA)
+            if not isinstance(stmt, pycparser.c_ast.Break):
+                s += self._generate_stmt(stmt, add_indent=True)
         return s
 
     def visit_Label(self, n):
@@ -396,21 +619,30 @@ class PseudocodeGenerator(object):
         if name in ('struct', 'union'):
             members = n.decls
             body_function = self._generate_struct_union_body
+            # Use ADA-style 'RECORD' instead of 'struct'
+            keyword = 'RECORD' if name == 'struct' else 'UNION'
         else:
             assert name == 'enum'
             members = None if n.values is None else n.values.enumerators
             body_function = self._generate_enum_body
-        s = name + ' ' + (n.name or '')
+            keyword = 'ENUM'
+            
+        type_name = n.name or ''
+        
         if members is not None:
             # None means no members
             # Empty sequence means an empty list of members
-            s += '\n'
+            if type_name:
+                s = 'TYPE ' + type_name + ' IS ' + keyword + '\n'
+            else:
+                s = keyword + '\n'
             s += self._make_indent()
             self.indent_level += 2
-            s += '{\n'
             s += body_function(members)
             self.indent_level -= 2
-            s += self._make_indent() + '}'
+            s += self._make_indent() + 'END ' + keyword
+        else:
+            s = keyword + ' ' + type_name
         return s
 
     def _generate_struct_union_body(self, members):
@@ -467,7 +699,6 @@ class PseudocodeGenerator(object):
             encountered on the way down to a TypeDecl, to allow proper
             generation from it.
         """
-        long_type_names = {'int': 'Integer', 'char': 'String', 'double' : 'Float64'}
         typ = type(n)
         #~ print(n, modifiers)
 
@@ -477,8 +708,8 @@ class PseudocodeGenerator(object):
             # if n.quals: s += ' '.join(n.quals) + ' '
             s += self.visit(n.type)
 
-            if s in long_type_names:
-                s = long_type_names[s]
+            if s in self.TYPE_MAPPINGS:
+                s = self.TYPE_MAPPINGS[s]
 
             nstr = n.declname if n.declname and emit_declname else ''
             # Resolve modifiers.
@@ -525,6 +756,8 @@ class PseudocodeGenerator(object):
             return self._generate_type(n.type, modifiers + [n],
                                        emit_declname = emit_declname)
         else:
+            # Fallback for unhandled types
+            # print("Unhandled type in _generate_type:", typ)
             return self.visit(n)
 
     def _parenthesize_if(self, n, condition):
