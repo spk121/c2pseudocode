@@ -72,17 +72,13 @@ class PseudocodeGenerator(object):
         else:
             operand = self._parenthesize_unless_simple(n.expr)
             if n.op == 'p++':
-                # return '%s++' % operand
-                return operand + ' = ' + operand + ' + 1'
+                return operand + ' := ' + operand + ' + 1'
             elif n.op == '++':
-                # return '%s%s' % (n.op, operand)
-                return operand + ' = ' + operand + ' + 1'
+                return operand + ' := ' + operand + ' + 1'
             elif n.op == 'p--':
-                # return '%s--' % operand
-                return operand + ' = ' + operand + ' - 1'
+                return operand + ' := ' + operand + ' - 1'
             elif n.op == '--':
-                # return '%s%s' % (n.op, operand)
-                return operand + ' = ' + operand + ' - 1'
+                return operand + ' := ' + operand + ' - 1'
             elif n.op == '!':
                 return 'NOT ' + operand
             else:
@@ -137,9 +133,9 @@ class PseudocodeGenerator(object):
         elif n.op == '||':
             op = 'OR'
         elif n.op == '==':
-            op = 'EQUAL'
+            op = '='
         elif n.op == '!=':
-            op = 'NOTEQUAL'
+            op = '/='
         return '%s %s %s' % (lval_str, op, rval_str)
 
     def visit_Assignment(self, n):
@@ -147,13 +143,15 @@ class PseudocodeGenerator(object):
                             n.rvalue,
                             lambda n: isinstance(n, pycparser.c_ast.Assignment))
         if n.op == '+=':
-            return '%s = %s + %s' % (self.visit(n.lvalue), self.visit(n.lvalue), rval_str)
+            return '%s := %s + %s' % (self.visit(n.lvalue), self.visit(n.lvalue), rval_str)
         elif n.op == '-=':
-            return '%s = %s * %s' % (self.visit(n.lvalue), self.visit(n.lvalue), rval_str)
+            return '%s := %s - %s' % (self.visit(n.lvalue), self.visit(n.lvalue), rval_str)
         elif n.op == '*=':
-            return '%s = %s * %s' % (self.visit(n.lvalue), self.visit(n.lvalue), rval_str)
+            return '%s := %s * %s' % (self.visit(n.lvalue), self.visit(n.lvalue), rval_str)
         elif n.op == '/=':
-            return '%s = %s / %s' % (self.visit(n.lvalue), self.visit(n.lvalue), rval_str)
+            return '%s := %s / %s' % (self.visit(n.lvalue), self.visit(n.lvalue), rval_str)
+        elif n.op == '=':
+            return '%s := %s' % (self.visit(n.lvalue), rval_str)
             
         return '%s %s %s' % (self.visit(n.lvalue), n.op, rval_str)
 
@@ -230,14 +228,60 @@ class PseudocodeGenerator(object):
             )
 
     def visit_FuncDef(self, n):
-        decl = 'PROCEDURE ' + self.visit(n.decl) + ' IS'
+        # Check if this is a function (returns non-void) or procedure (returns void)
+        is_procedure = False
+        func_name = ''
+        return_type = ''
+        
+        # Navigate the AST to find return type
+        if hasattr(n.decl, 'type') and isinstance(n.decl.type, pycparser.c_ast.FuncDecl):
+            if hasattr(n.decl.type, 'type') and isinstance(n.decl.type.type, pycparser.c_ast.TypeDecl):
+                if hasattr(n.decl.type.type, 'type') and isinstance(n.decl.type.type.type, pycparser.c_ast.IdentifierType):
+                    type_names = n.decl.type.type.type.names
+                    if type_names == ['void']:
+                        is_procedure = True
+                    else:
+                        # Get the return type for functions
+                        return_type = ' '.join(type_names)
+                        if return_type in {'int': 'Integer', 'char': 'String', 'double': 'Float64'}:
+                            return_type = {'int': 'Integer', 'char': 'String', 'double': 'Float64'}[return_type]
+                    func_name = n.decl.type.type.declname
+                    
+        decl_str = self.visit(n.decl)
+        
+        # Parse the declaration to extract function name and parameters
+        # Format is typically: "name(params) : returntype"
+        if ' : ' in decl_str:
+            parts = decl_str.rsplit(' : ', 1)
+            if len(parts) == 2:
+                decl_str = parts[0]  # Keep only the name and parameters
+                ret_type_from_decl = parts[1].strip()
+                if ret_type_from_decl.lower() == 'void':
+                    is_procedure = True
+                    return_type = ''
+                else:
+                    return_type = ret_type_from_decl
+        
+        # Remove (void) parameters for cleaner output
+        decl_str = decl_str.replace('(void)', '()')
+        
+        if is_procedure:
+            decl = 'PROCEDURE ' + decl_str + ' IS'
+            func_type = 'PROCEDURE'
+        else:
+            decl = 'FUNCTION ' + decl_str
+            if return_type:
+                decl += ' RETURN ' + return_type
+            decl += ' IS'
+            func_type = 'FUNCTION'
+            
         self.indent_level = 0
         body = self.visit(n.body)
         if n.param_decls:
             knrdecls = ';\n'.join(self.visit(p) for p in n.param_decls)
-            return decl + '\n' + knrdecls + ';\n' + body + 'END PROCEDURE\n'
+            return decl + '\n' + knrdecls + ';\n' + body + 'END ' + func_type + '\n'
         else:
-            return decl + '\nBEGIN\n' + body + 'END PROCEDURE\n\n'
+            return decl + '\nBEGIN\n' + body + 'END ' + func_type + '\n\n'
 
     def visit_FileAST(self, n):
         s = ''
@@ -274,7 +318,7 @@ class PseudocodeGenerator(object):
         return s
 
     def visit_Break(self, n):
-        return 'BREAK'
+        return 'EXIT'
 
     def visit_Continue(self, n):
         return 'CONTINUE'
@@ -309,18 +353,20 @@ class PseudocodeGenerator(object):
         return s
 
     def visit_While(self, n):
-        s = 'WHILE ('
+        s = 'WHILE '
         if n.cond: s += self.visit(n.cond)
-        s += ')\n'
+        s += ' LOOP\n'
         s += self._generate_stmt(n.stmt, add_indent=True)
+        s += self._make_indent() + 'END LOOP'
         return s
 
     def visit_DoWhile(self, n):
-        s = 'DO\n'
+        s = 'LOOP\n'
         s += self._generate_stmt(n.stmt, add_indent=True)
-        s += self._make_indent() + 'WHILE ('
+        s += self._make_indent() + 'EXIT WHEN NOT ('
         if n.cond: s += self.visit(n.cond)
-        s += ')'
+        s += ')\n'
+        s += self._make_indent() + 'END LOOP'
         return s
 
     def visit_StaticAssert(self, n):
@@ -333,20 +379,25 @@ class PseudocodeGenerator(object):
         return s
 
     def visit_Switch(self, n):
-        s = 'SWITCH ' + self.visit(n.cond) + '\n'
+        s = 'CASE ' + self.visit(n.cond) + ' IS\n'
         s += self._generate_stmt(n.stmt, add_indent=True)
+        s += self._make_indent() + 'END CASE'
         return s
 
     def visit_Case(self, n):
-        s = 'CASE ' + self.visit(n.expr) + ':\n'
+        s = 'WHEN ' + self.visit(n.expr) + ' =>\n'
         for stmt in n.stmts:
-            s += self._generate_stmt(stmt, add_indent=True)
+            # Skip BREAK statements in case blocks (not needed in ADA)
+            if not isinstance(stmt, pycparser.c_ast.Break):
+                s += self._generate_stmt(stmt, add_indent=True)
         return s
 
     def visit_Default(self, n):
-        s = 'DEFAULT:\n'
+        s = 'WHEN OTHERS =>\n'
         for stmt in n.stmts:
-            s += self._generate_stmt(stmt, add_indent=True)
+            # Skip BREAK statements in default blocks (not needed in ADA)
+            if not isinstance(stmt, pycparser.c_ast.Break):
+                s += self._generate_stmt(stmt, add_indent=True)
         return s
 
     def visit_Label(self, n):

@@ -1,0 +1,14 @@
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+output.txt
+*.o
+*.exe
+*.so
+*.dylib
+.DS_Store
+*.swp
+*.swo
+*~
