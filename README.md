@@ -103,6 +103,10 @@ python3 c-to-pseudocode.py mycode.c --only-from-file -o output.txt
 
 See [CONVERSION.md](CONVERSION.md) for complete conversion rules and examples.
 
+### Handling Compiler-Specific Types
+
+For this to work, the script needs to be able to identify every type. Some compilers, like gcc, have types that it considers fundamental, like `__builtin_va_list`, or has C grammar that is not standard, like `__attribute__`.  All the common ones I've run across with `gcc` are converted to more familiar C constructs in the `cpp_args` table in `c-to-pseudocode.py`.  If you are using a different compiler or C library, you may need to add your own entries to the `cpp_args` table to convert compiler-specific types and constructions back to more familiar C constructs.
+
 ## Files
 
 - `c-to-pseudocode.py` - Main converter script
