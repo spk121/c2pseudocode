@@ -1,0 +1,49 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "c2pseudocode"
+version = "0.1.0"
+description = "Convert C source code to ADA-like pseudocode for documentation purposes"
+readme = "README.md"
+requires-python = ">=3.7"
+license = {text = "BSD"}
+authors = [
+    {name = "Mike Gran"},
+]
+keywords = ["c", "pseudocode", "ada", "documentation", "do-178c"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: BSD License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.7",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Code Generators",
+    "Topic :: Software Development :: Documentation",
+]
+dependencies = [
+    "pycparser",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "pytest-cov>=4.0",
+]
+
+[project.scripts]
+c2pseudocode = "c2pseudocode.__main__:main"
+
+[project.urls]
+Homepage = "https://github.com/spk121/c2pseudocode"
+Repository = "https://github.com/spk121/c2pseudocode"
+Issues = "https://github.com/spk121/c2pseudocode/issues"
+
+[tool.setuptools.packages.find]
+where = ["src"]

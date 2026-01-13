@@ -10,15 +10,46 @@ This project also includes a version of `unifdef` written by Tony Finch.
 
 ## Quick Start
 
-```bash
-# Install dependencies
-pip install pycparser
+### Installation
 
+```bash
+# Install from source
+pip install -e .
+
+# Or just install dependencies
+pip install pycparser
+```
+
+### Command Line Usage
+
+```bash
 # Convert a C file (shows everything including system headers)
-python3 c-to-pseudocode.py input.c
+c2pseudocode input.c
+
+# Or run as a module
+python3 -m c2pseudocode input.c
 
 # Convert only the code from your file (recommended for most cases)
-python3 c-to-pseudocode.py input.c --only-from-file -o output.txt
+c2pseudocode input.c --only-from-file -o output.txt
+```
+
+### Python API Usage
+
+```python
+from c2pseudocode import convert_c_string_to_pseudocode, convert_c_file_to_pseudocode
+
+# Convert C code string to pseudocode
+c_code = """
+int add(int a, int b) {
+    return a + b;
+}
+"""
+pseudocode = convert_c_string_to_pseudocode(c_code)
+print(pseudocode)
+
+# Convert a C file to pseudocode
+pseudocode = convert_c_file_to_pseudocode("myfile.c", only_from_file=True)
+print(pseudocode)
 ```
 
 ## What It Does
@@ -52,14 +83,42 @@ END FUNCTION
 
 ## Usage
 
-### Basic Conversion
+### Command Line
 
 ```bash
-# Convert a simple C file without includes
-python3 c-to-pseudocode.py mycode.c
+# Convert a simple C file
+c2pseudocode mycode.c
 
 # Save output to a file
-python3 c-to-pseudocode.py mycode.c -o pseudocode.txt
+c2pseudocode mycode.c -o pseudocode.txt
+```
+
+### Python API
+
+```python
+from c2pseudocode import (
+    convert_c_string_to_pseudocode, 
+    convert_c_file_to_pseudocode,
+    get_default_cpp_args
+)
+
+# Convert C code string (without preprocessing)
+c_code = """
+int add(int a, int b) {
+    return a + b;
+}
+"""
+pseudocode = convert_c_string_to_pseudocode(c_code)
+print(pseudocode)
+
+# Convert a file (with preprocessing)
+pseudocode = convert_c_file_to_pseudocode("myfile.c", only_from_file=True)
+print(pseudocode)
+
+# Custom cpp arguments
+custom_args = get_default_cpp_args()
+custom_args.append("-DMY_DEFINE=1")
+pseudocode = convert_c_file_to_pseudocode("myfile.c", cpp_args=custom_args)
 ```
 
 ### Files with System Includes
@@ -68,7 +127,7 @@ When your C file includes system headers (like `<stdio.h>`), use `--only-from-fi
 
 ```bash
 # Only show pseudocode for code in mycode.c, not from <stdio.h>, <stdlib.h>, etc.
-python3 c-to-pseudocode.py mycode.c --only-from-file
+c2pseudocode mycode.c --only-from-file
 
 # Example: A file with #include <stdio.h> that would otherwise generate 
 # hundreds of lines of system library code now shows only your functions
@@ -76,13 +135,13 @@ python3 c-to-pseudocode.py mycode.c --only-from-file
 
 **Without `--only-from-file`:**
 ```bash
-$ python3 c-to-pseudocode.py test/t_main_no_args.c | wc -l
+$ c2pseudocode tests/fixtures/t_main_no_args.c | wc -l
 239  # Includes all of stdio.h and its dependencies
 ```
 
 **With `--only-from-file`:**
 ```bash
-$ python3 c-to-pseudocode.py test/t_main_no_args.c --only-from-file
+$ c2pseudocode tests/fixtures/t_main_no_args.c --only-from-file
 FUNCTION main() RETURN Integer IS
 BEGIN
   RETURN 0
@@ -93,10 +152,25 @@ END FUNCTION
 
 ```bash
 # Don't use C preprocessor (for already preprocessed files)
-python3 c-to-pseudocode.py preprocessed.i --no-cpp
+c2pseudocode preprocessed.i --no-cpp
 
 # Combine options
-python3 c-to-pseudocode.py mycode.c --only-from-file -o output.txt
+c2pseudocode mycode.c --only-from-file -o output.txt
+```
+
+## Testing
+
+Run the test suite with pytest:
+
+```bash
+# Install development dependencies
+pip install -e ".[dev]"
+
+# Run tests
+pytest
+
+# Run with coverage
+pytest --cov=c2pseudocode --cov-report=html
 ```
 
 ## Documentation
@@ -105,13 +179,25 @@ See [CONVERSION.md](CONVERSION.md) for complete conversion rules and examples.
 
 ### Handling Compiler-Specific Types
 
-For this to work, the script needs to be able to identify every type. Some compilers, like gcc, have types that it considers fundamental, like `__builtin_va_list`, or has C grammar that is not standard, like `__attribute__`.  All the common ones I've run across with `gcc` are converted to more familiar C constructs in the `cpp_args` table in `c-to-pseudocode.py`.  If you are using a different compiler or C library, you may need to add your own entries to the `cpp_args` table to convert compiler-specific types and constructions back to more familiar C constructs.
+For this to work, the script needs to be able to identify every type. Some compilers, like gcc, have types that it considers fundamental, like `__builtin_va_list`, or has C grammar that is not standard, like `__attribute__`.  All the common ones I've run across with `gcc` are converted to more familiar C constructs via `get_default_cpp_args()`.  If you are using a different compiler or C library, you may need to customize the cpp arguments when calling the API functions.
 
-## Files
+## Project Structure
 
-- `c-to-pseudocode.py` - Main converter script
-- `pseudocode_generator.py` - Core pseudocode generation logic
-- `unifdef.c` - Preprocessor conditional removal tool
+```
+c2pseudocode/
+├── src/c2pseudocode/        # Main package
+│   ├── __init__.py          # Public API exports
+│   ├── __main__.py          # CLI entry point
+│   ├── api.py               # Core API functions
+│   └── pseudocode_generator.py  # AST visitor for code generation
+├── tests/                   # Test suite
+│   ├── fixtures/            # Test C files
+│   └── test_conversion.py   # Pytest test cases
+├── tools/unifdef/           # unifdef utility (separate C program)
+├── pyproject.toml           # Modern Python packaging configuration
+├── requirements.txt         # Runtime dependencies
+└── README.md                # This file
+```
 - `CONVERSION.md` - Complete documentation of conversion rules
 
 ## Workflow
