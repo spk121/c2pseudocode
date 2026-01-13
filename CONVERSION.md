@@ -299,7 +299,7 @@ The following C features are simplified or not fully supported:
 
 ## Examples
 
-See the test files in `/tmp/` for comprehensive examples of the conversion.
+The examples above demonstrate the conversion of various C constructs. You can test the converter with your own C files to see how they are converted.
 
 ## Related Tools
 

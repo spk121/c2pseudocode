@@ -14,6 +14,14 @@ class PseudocodeGenerator(object):
         return a value from each visit method, using string accumulation in
         generic_visit.
     """
+    
+    # Type name mappings from C to pseudocode
+    TYPE_MAPPINGS = {
+        'int': 'Integer',
+        'char': 'String',
+        'double': 'Float64'
+    }
+    
     def __init__(self, reduce_parentheses=False):
         """ Constructs C-code generator
 
@@ -281,8 +289,8 @@ class PseudocodeGenerator(object):
                     else:
                         # Get the return type for functions
                         return_type = ' '.join(type_names)
-                        if return_type in {'int': 'Integer', 'char': 'String', 'double': 'Float64'}:
-                            return_type = {'int': 'Integer', 'char': 'String', 'double': 'Float64'}[return_type]
+                        if return_type in self.TYPE_MAPPINGS:
+                            return_type = self.TYPE_MAPPINGS[return_type]
                     func_name = n.decl.type.type.declname
                     
         decl_str = self.visit(n.decl)
@@ -519,10 +527,7 @@ class PseudocodeGenerator(object):
             self.indent_level += 2
             s += body_function(members)
             self.indent_level -= 2
-            if type_name:
-                s += self._make_indent() + 'END ' + keyword
-            else:
-                s += self._make_indent() + 'END ' + keyword
+            s += self._make_indent() + 'END ' + keyword
         else:
             s = keyword + ' ' + type_name
         return s
@@ -581,7 +586,6 @@ class PseudocodeGenerator(object):
             encountered on the way down to a TypeDecl, to allow proper
             generation from it.
         """
-        long_type_names = {'int': 'Integer', 'char': 'String', 'double' : 'Float64'}
         typ = type(n)
         #~ print(n, modifiers)
 
@@ -591,8 +595,8 @@ class PseudocodeGenerator(object):
             # if n.quals: s += ' '.join(n.quals) + ' '
             s += self.visit(n.type)
 
-            if s in long_type_names:
-                s = long_type_names[s]
+            if s in self.TYPE_MAPPINGS:
+                s = self.TYPE_MAPPINGS[s]
 
             nstr = n.declname if n.declname and emit_declname else ''
             # Resolve modifiers.
