@@ -105,8 +105,7 @@ See [CONVERSION.md](CONVERSION.md) for complete conversion rules and examples.
 
 - `c-to-pseudocode.py` - Main converter script
 - `pseudocode_generator.py` - Core pseudocode generation logic
-- `c2ada3.py` - Alternative regex-based converter (legacy)
-- `unifdef.c` / `unifdef.exe` - Preprocessor conditional removal tool
+- `unifdef.c` - Preprocessor conditional removal tool
 - `CONVERSION.md` - Complete documentation of conversion rules
 
 ## Workflow
