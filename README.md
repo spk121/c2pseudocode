@@ -4,7 +4,7 @@ A tool to convert C source code to ADA-like pseudocode for documentation purpose
 
 Once upon a time, I was asked to generate pseudocode for a DO-178C Software Design Document, but, this was to backfill code that was already written. I started writing all the pseudocode by hand, but, I realized that was a waste of time. So, I wrote this tool adapted from Eli Bendersky's [https://eli.thegreenplace.net/] work on parsing C in Python.
 
-It takes a C file and generates a sort of ADA-like pseudocode. ADA-like pseudocode is well understoon in the USA Aerospace industry, at least among the greyhairs.
+It takes a C file and generates a sort of ADA-like pseudocode. ADA-like pseudocode is well understood in the USA Aerospace industry, at least among the greyhairs.
 
 ## Quick Start
 
