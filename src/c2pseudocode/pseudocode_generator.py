@@ -68,8 +68,302 @@ class PseudocodeGenerator(object):
         # instead of n.type
         return sref + '.' + self.visit(n.field)
 
+    def _convert_printf_format(self, format_str, args):
+        """Convert C printf format string to Python-style format.
+        
+        Args:
+            format_str: The format string (as a string, not including quotes)
+            args: List of argument expressions (as strings)
+            
+        Returns:
+            Formatted string with Python-style placeholders
+        """
+        import re
+        
+        # Find all printf format specifiers
+        # Pattern matches: %[flags][width][.precision][length]specifier
+        pattern = r'%(?:[-+ #0])?(?:\*|\d+)?(?:\.(?:\*|\d+))?(?:[hlLzjt])?[diouxXeEfFgGaAcspn%]'
+        
+        # Find all format specifiers
+        specifiers = re.findall(pattern, format_str)
+        
+        # Replace each format specifier with a Python-style placeholder
+        result = format_str
+        arg_index = 0
+        
+        for spec in specifiers:
+            if spec == '%%':
+                # Keep literal % signs
+                continue
+            
+            if arg_index < len(args):
+                # Replace with {arg_name}
+                result = result.replace(spec, '{' + args[arg_index] + '}', 1)
+                arg_index += 1
+        
+        return result
+    
+    def _convert_scanf_format(self, format_str, args):
+        """Convert C scanf format string to Python-style format, stripping & operators.
+        
+        Args:
+            format_str: The format string (as a string, not including quotes)
+            args: List of argument expressions (as strings)
+            
+        Returns:
+            Formatted string with Python-style placeholders
+        """
+        import re
+        
+        # Find all scanf format specifiers
+        pattern = r'%(?:[-+ #0])?(?:\*|\d+)?(?:\.(?:\*|\d+))?(?:[hlLzjt])?[diouxXeEfFgGaAcspn%]'
+        
+        # Find all format specifiers
+        specifiers = re.findall(pattern, format_str)
+        
+        # Replace each format specifier with a Python-style placeholder
+        result = format_str
+        arg_index = 0
+        
+        for spec in specifiers:
+            if spec == '%%':
+                # Keep literal % signs
+                continue
+            
+            if arg_index < len(args):
+                # Strip the & operator if present
+                arg = args[arg_index].lstrip('&').strip()
+                # Replace with {arg_name}
+                result = result.replace(spec, '{' + arg + '}', 1)
+                arg_index += 1
+        
+        return result
+    
     def visit_FuncCall(self, n):
         fref = self._parenthesize_unless_simple(n.name)
+        func_name = self.visit(n.name)
+        
+        # Handle special stdio functions
+        if func_name == 'printf':
+            # printf("format", args...) -> PRINT("format{args}")
+            if n.args and hasattr(n.args, 'exprs') and len(n.args.exprs) > 0:
+                # First arg is the format string
+                format_arg = n.args.exprs[0]
+                if isinstance(format_arg, pycparser.c_ast.Constant) and format_arg.type == 'string':
+                    # Extract the string value (remove quotes)
+                    format_str = format_arg.value[1:-1] if format_arg.value.startswith('"') else format_arg.value
+                    
+                    # Get remaining arguments
+                    arg_strs = [self.visit(arg) for arg in n.args.exprs[1:]]
+                    
+                    # Convert format string
+                    new_format = self._convert_printf_format(format_str, arg_strs)
+                    
+                    return 'PRINT("' + new_format + '")'
+            
+            # Fallback if parsing fails
+            return 'PRINT(' + self.visit(n.args) + ')'
+        
+        elif func_name == 'fprintf':
+            # fprintf(fp, "format", args...) -> PRINT(fp, "format{args}")
+            if n.args and hasattr(n.args, 'exprs') and len(n.args.exprs) >= 2:
+                # First arg is file pointer
+                fp_arg = self.visit(n.args.exprs[0])
+                
+                # Second arg is the format string
+                format_arg = n.args.exprs[1]
+                if isinstance(format_arg, pycparser.c_ast.Constant) and format_arg.type == 'string':
+                    # Extract the string value (remove quotes)
+                    format_str = format_arg.value[1:-1] if format_arg.value.startswith('"') else format_arg.value
+                    
+                    # Get remaining arguments
+                    arg_strs = [self.visit(arg) for arg in n.args.exprs[2:]]
+                    
+                    # Convert format string
+                    new_format = self._convert_printf_format(format_str, arg_strs)
+                    
+                    return 'PRINT(' + fp_arg + ', "' + new_format + '")'
+            
+            # Fallback if parsing fails
+            return 'PRINT(' + self.visit(n.args) + ')'
+        
+        elif func_name == 'fopen':
+            # fopen("file", "mode") -> OPEN_FILE("file", "mode")
+            return 'OPEN_FILE(' + self.visit(n.args) + ')'
+        
+        elif func_name == 'fclose':
+            # fclose(fp) -> CLOSE_FILE(fp)
+            return 'CLOSE_FILE(' + self.visit(n.args) + ')'
+        
+        elif func_name == 'fseek':
+            # fseek(fp, offset, whence) -> SET_FILE_POSITION(fp, offset, START/CURRENT/END)
+            # Convert numeric whence constants to symbolic names
+            if n.args and hasattr(n.args, 'exprs') and len(n.args.exprs) >= 3:
+                fp_arg = self.visit(n.args.exprs[0])
+                offset_arg = self.visit(n.args.exprs[1])
+                whence_arg = n.args.exprs[2]
+                
+                # Map numeric constants to symbolic names
+                whence_str = 'CURRENT'  # default
+                if isinstance(whence_arg, pycparser.c_ast.Constant):
+                    if whence_arg.value == '0':
+                        whence_str = 'START'
+                    elif whence_arg.value == '1':
+                        whence_str = 'CURRENT'
+                    elif whence_arg.value == '2':
+                        whence_str = 'END'
+                    else:
+                        whence_str = self.visit(whence_arg)
+                elif isinstance(whence_arg, pycparser.c_ast.ID):
+                    # Try to infer from the variable name (e.g., SEEK_SET, SEEK_CUR, SEEK_END)
+                    name = whence_arg.name
+                    if 'SET' in name:
+                        whence_str = 'START'
+                    elif 'CUR' in name:
+                        whence_str = 'CURRENT'
+                    elif 'END' in name:
+                        whence_str = 'END'
+                    else:
+                        whence_str = name
+                else:
+                    whence_str = self.visit(whence_arg)
+                
+                return 'SET_FILE_POSITION(' + fp_arg + ', ' + offset_arg + ', ' + whence_str + ')'
+            
+            # Fallback if parsing fails
+            return 'SET_FILE_POSITION(' + self.visit(n.args) + ')'
+        
+        elif func_name == 'ftell':
+            # ftell(fp) -> GET_FILE_POSITION(fp)
+            return 'GET_FILE_POSITION(' + self.visit(n.args) + ')'
+        
+        elif func_name == 'fputs':
+            # fputs(str, fp) -> WRITE_LINE(str, fp)
+            return 'WRITE_LINE(' + self.visit(n.args) + ')'
+        
+        elif func_name == 'fgets':
+            # fgets(buffer, size, fp) -> READ_LINE(buffer, fp)
+            # Omit the size parameter as it's an implementation detail
+            if n.args and hasattr(n.args, 'exprs') and len(n.args.exprs) >= 3:
+                buffer_arg = self.visit(n.args.exprs[0])
+                fp_arg = self.visit(n.args.exprs[2])
+                return 'READ_LINE(' + buffer_arg + ', ' + fp_arg + ')'
+            # Fallback if parsing fails
+            return 'READ_LINE(' + self.visit(n.args) + ')'
+        
+        elif func_name == 'fread':
+            # fread(...) -> READ(...)
+            return 'READ(' + self.visit(n.args) + ')'
+        
+        elif func_name == 'fwrite':
+            # fwrite(...) -> WRITE(...)
+            return 'WRITE(' + self.visit(n.args) + ')'
+        
+        elif func_name == 'sprintf':
+            # sprintf(buffer, "format", args...) -> FORMAT_STRING(buffer, "format{args}")
+            if n.args and hasattr(n.args, 'exprs') and len(n.args.exprs) >= 2:
+                buffer_arg = self.visit(n.args.exprs[0])
+                format_arg = n.args.exprs[1]
+                if isinstance(format_arg, pycparser.c_ast.Constant) and format_arg.type == 'string':
+                    format_str = format_arg.value[1:-1] if format_arg.value.startswith('"') else format_arg.value
+                    arg_strs = [self.visit(arg) for arg in n.args.exprs[2:]]
+                    new_format = self._convert_printf_format(format_str, arg_strs)
+                    return 'FORMAT_STRING(' + buffer_arg + ', "' + new_format + '")'
+            return 'FORMAT_STRING(' + self.visit(n.args) + ')'
+        
+        elif func_name == 'snprintf':
+            # snprintf(buffer, size, "format", args...) -> FORMAT_STRING(buffer, "format{args}")
+            # Omit size as it's an implementation detail
+            if n.args and hasattr(n.args, 'exprs') and len(n.args.exprs) >= 3:
+                buffer_arg = self.visit(n.args.exprs[0])
+                format_arg = n.args.exprs[2]
+                if isinstance(format_arg, pycparser.c_ast.Constant) and format_arg.type == 'string':
+                    format_str = format_arg.value[1:-1] if format_arg.value.startswith('"') else format_arg.value
+                    arg_strs = [self.visit(arg) for arg in n.args.exprs[3:]]
+                    new_format = self._convert_printf_format(format_str, arg_strs)
+                    return 'FORMAT_STRING(' + buffer_arg + ', "' + new_format + '")'
+            return 'FORMAT_STRING(' + self.visit(n.args) + ')'
+        
+        elif func_name == 'scanf':
+            # scanf("format", &var...) -> READ_INPUT("format {var}")
+            if n.args and hasattr(n.args, 'exprs') and len(n.args.exprs) > 0:
+                format_arg = n.args.exprs[0]
+                if isinstance(format_arg, pycparser.c_ast.Constant) and format_arg.type == 'string':
+                    format_str = format_arg.value[1:-1] if format_arg.value.startswith('"') else format_arg.value
+                    arg_strs = [self.visit(arg) for arg in n.args.exprs[1:]]
+                    new_format = self._convert_scanf_format(format_str, arg_strs)
+                    return 'READ_INPUT("' + new_format + '")'
+            return 'READ_INPUT(' + self.visit(n.args) + ')'
+        
+        elif func_name == 'fscanf':
+            # fscanf(fp, "format", &var...) -> READ_FROM_FILE(fp, "format {var}")
+            if n.args and hasattr(n.args, 'exprs') and len(n.args.exprs) >= 2:
+                fp_arg = self.visit(n.args.exprs[0])
+                format_arg = n.args.exprs[1]
+                if isinstance(format_arg, pycparser.c_ast.Constant) and format_arg.type == 'string':
+                    format_str = format_arg.value[1:-1] if format_arg.value.startswith('"') else format_arg.value
+                    arg_strs = [self.visit(arg) for arg in n.args.exprs[2:]]
+                    new_format = self._convert_scanf_format(format_str, arg_strs)
+                    return 'READ_FROM_FILE(' + fp_arg + ', "' + new_format + '")'
+            return 'READ_FROM_FILE(' + self.visit(n.args) + ')'
+        
+        elif func_name == 'sscanf':
+            # sscanf(string, "format", &var...) -> PARSE_STRING(string, "format {var}")
+            if n.args and hasattr(n.args, 'exprs') and len(n.args.exprs) >= 2:
+                string_arg = self.visit(n.args.exprs[0])
+                format_arg = n.args.exprs[1]
+                if isinstance(format_arg, pycparser.c_ast.Constant) and format_arg.type == 'string':
+                    format_str = format_arg.value[1:-1] if format_arg.value.startswith('"') else format_arg.value
+                    arg_strs = [self.visit(arg) for arg in n.args.exprs[2:]]
+                    new_format = self._convert_scanf_format(format_str, arg_strs)
+                    return 'PARSE_STRING(' + string_arg + ', "' + new_format + '")'
+            return 'PARSE_STRING(' + self.visit(n.args) + ')'
+        
+        elif func_name == 'fgetc':
+            # fgetc(fp) -> READ_CHAR(fp)
+            return 'READ_CHAR(' + self.visit(n.args) + ')'
+        
+        elif func_name == 'fputc':
+            # fputc(char, fp) -> WRITE_CHAR(char, fp)
+            return 'WRITE_CHAR(' + self.visit(n.args) + ')'
+        
+        elif func_name == 'getchar':
+            # getchar() -> READ_CHAR()
+            return 'READ_CHAR()'
+        
+        elif func_name == 'putchar':
+            # putchar(char) -> WRITE_CHAR(char)
+            return 'WRITE_CHAR(' + self.visit(n.args) + ')'
+        
+        elif func_name == 'feof':
+            # feof(fp) -> AT_END(fp)
+            return 'AT_END(' + self.visit(n.args) + ')'
+        
+        elif func_name == 'ferror':
+            # ferror(fp) -> HAS_ERROR(fp)
+            return 'HAS_ERROR(' + self.visit(n.args) + ')'
+        
+        elif func_name == 'clearerr':
+            # clearerr(fp) -> CLEAR_ERROR(fp)
+            return 'CLEAR_ERROR(' + self.visit(n.args) + ')'
+        
+        elif func_name == 'rewind':
+            # rewind(fp) -> REWIND(fp)
+            return 'REWIND(' + self.visit(n.args) + ')'
+        
+        elif func_name == 'remove':
+            # remove(filename) -> DELETE_FILE(filename)
+            return 'DELETE_FILE(' + self.visit(n.args) + ')'
+        
+        elif func_name == 'rename':
+            # rename(oldname, newname) -> RENAME_FILE(oldname, newname)
+            return 'RENAME_FILE(' + self.visit(n.args) + ')'
+        
+        elif func_name == 'tmpfile':
+            # tmpfile() -> CREATE_TEMP_FILE()
+            return 'CREATE_TEMP_FILE()'
+        
+        # Default case - normal function call
         return fref + '(' + self.visit(n.args) + ')'
 
     def visit_UnaryOp(self, n):
