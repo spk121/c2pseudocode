@@ -97,11 +97,11 @@ class TestStringFunctions:
 
     def test_strchr(self):
         c_code = "void test() { char *s = \"hello\"; char *p = strchr(s, 'l'); }"
-        assert 'FIND_CHAR' in convert_c_string_to_pseudocode(c_code)
+        assert "FIND_CHAR(s, 'l')" in convert_c_string_to_pseudocode(c_code)
 
     def test_strrchr(self):
         c_code = "void test() { char *s = \"hello\"; char *p = strrchr(s, 'l'); }"
-        assert 'FIND_LAST_CHAR' in convert_c_string_to_pseudocode(c_code)
+        assert "FIND_LAST_CHAR(s, 'l')" in convert_c_string_to_pseudocode(c_code)
 
     def test_strstr(self):
         c_code = 'void test() { char *h = "hello world"; char *p = strstr(h, "world"); }'

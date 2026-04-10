@@ -340,7 +340,7 @@ class TestPointers:
         result = convert_c_string_to_pseudocode("void f() { int x; int *p = &x; }")
         assert "p" in result
         assert "x" in result
-        # address-of is stripped silently; pseudocode readers don't care about addresses
+        assert "&x" not in result
 
 
 class TestStructs:
