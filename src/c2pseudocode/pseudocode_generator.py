@@ -362,15 +362,162 @@ class PseudocodeGenerator(object):
         elif func_name == 'tmpfile':
             # tmpfile() -> CREATE_TEMP_FILE()
             return 'CREATE_TEMP_FILE()'
+
+        # stdlib.h — memory management
+        elif func_name == 'malloc':
+            return 'ALLOCATE(' + self.visit(n.args) + ')'
         
+        elif func_name == 'calloc':
+            return 'ALLOCATE_ARRAY(' + self.visit(n.args) + ')'
+        
+        elif func_name == 'realloc':
+            return 'REALLOCATE(' + self.visit(n.args) + ')'
+        
+        elif func_name == 'free':
+            return 'DEALLOCATE(' + self.visit(n.args) + ')'
+
+        # stdlib.h — program control
+        elif func_name == 'exit':
+            return 'EXIT_PROGRAM(' + self.visit(n.args) + ')'
+        
+        elif func_name == 'abort':
+            return 'ABORT_PROGRAM()'
+        
+        elif func_name == 'rand':
+            return 'RANDOM_INTEGER()'
+        
+        elif func_name == 'srand':
+            return 'SET_RANDOM_SEED(' + self.visit(n.args) + ')'
+
+        # stdlib.h — string-to-number conversions
+        elif func_name == 'atoi':
+            return 'STRING_TO_INTEGER(' + self.visit(n.args) + ')'
+        
+        elif func_name == 'atol':
+            return 'STRING_TO_LONG(' + self.visit(n.args) + ')'
+        
+        elif func_name == 'atof':
+            return 'STRING_TO_FLOAT(' + self.visit(n.args) + ')'
+        
+        elif func_name == 'strtol':
+            # strtol(s, end, base) -> PARSE_INTEGER(s, base)
+            # Drop the end-pointer argument as an implementation detail
+            if n.args and hasattr(n.args, 'exprs') and len(n.args.exprs) >= 3:
+                s_arg = self.visit(n.args.exprs[0])
+                base_arg = self.visit(n.args.exprs[2])
+                return 'PARSE_INTEGER(' + s_arg + ', ' + base_arg + ')'
+            return 'PARSE_INTEGER(' + self.visit(n.args) + ')'
+        
+        elif func_name == 'strtod':
+            # strtod(s, end) -> PARSE_FLOAT(s)
+            # Drop the end-pointer argument as an implementation detail
+            if n.args and hasattr(n.args, 'exprs') and len(n.args.exprs) >= 1:
+                s_arg = self.visit(n.args.exprs[0])
+                return 'PARSE_FLOAT(' + s_arg + ')'
+            return 'PARSE_FLOAT(' + self.visit(n.args) + ')'
+
+        # string.h — string operations
+        elif func_name == 'strlen':
+            return 'STRING_LENGTH(' + self.visit(n.args) + ')'
+        
+        elif func_name == 'strcpy':
+            return 'COPY_STRING(' + self.visit(n.args) + ')'
+        
+        elif func_name == 'strncpy':
+            return 'COPY_STRING(' + self.visit(n.args) + ')'
+        
+        elif func_name == 'strcat':
+            return 'APPEND_STRING(' + self.visit(n.args) + ')'
+        
+        elif func_name == 'strncat':
+            return 'APPEND_STRING(' + self.visit(n.args) + ')'
+        
+        elif func_name == 'strcmp':
+            return 'COMPARE_STRINGS(' + self.visit(n.args) + ')'
+        
+        elif func_name == 'strncmp':
+            return 'COMPARE_STRINGS(' + self.visit(n.args) + ')'
+        
+        elif func_name == 'strchr':
+            return 'FIND_CHAR(' + self.visit(n.args) + ')'
+        
+        elif func_name == 'strrchr':
+            return 'FIND_LAST_CHAR(' + self.visit(n.args) + ')'
+        
+        elif func_name == 'strstr':
+            return 'FIND_STRING(' + self.visit(n.args) + ')'
+
+        # string.h — raw memory operations
+        elif func_name == 'memcpy':
+            return 'COPY_MEMORY(' + self.visit(n.args) + ')'
+        
+        elif func_name == 'memmove':
+            return 'MOVE_MEMORY(' + self.visit(n.args) + ')'
+        
+        elif func_name == 'memset':
+            return 'FILL_MEMORY(' + self.visit(n.args) + ')'
+        
+        elif func_name == 'memcmp':
+            return 'COMPARE_MEMORY(' + self.visit(n.args) + ')'
+
+        # math.h — mathematical functions
+        elif func_name == 'sqrt':
+            return 'SQUARE_ROOT(' + self.visit(n.args) + ')'
+        
+        elif func_name in ('abs', 'fabs'):
+            return 'ABSOLUTE_VALUE(' + self.visit(n.args) + ')'
+        
+        elif func_name == 'pow':
+            return 'POWER(' + self.visit(n.args) + ')'
+        
+        elif func_name == 'exp':
+            return 'EXPONENTIAL(' + self.visit(n.args) + ')'
+        
+        elif func_name == 'log':
+            return 'NATURAL_LOG(' + self.visit(n.args) + ')'
+        
+        elif func_name == 'log2':
+            return 'LOG2(' + self.visit(n.args) + ')'
+        
+        elif func_name == 'log10':
+            return 'LOG10(' + self.visit(n.args) + ')'
+        
+        elif func_name == 'ceil':
+            return 'CEILING(' + self.visit(n.args) + ')'
+        
+        elif func_name == 'floor':
+            return 'FLOOR(' + self.visit(n.args) + ')'
+        
+        elif func_name == 'round':
+            return 'ROUND(' + self.visit(n.args) + ')'
+        
+        elif func_name == 'sin':
+            return 'SINE(' + self.visit(n.args) + ')'
+        
+        elif func_name == 'cos':
+            return 'COSINE(' + self.visit(n.args) + ')'
+        
+        elif func_name == 'tan':
+            return 'TANGENT(' + self.visit(n.args) + ')'
+        
+        elif func_name == 'asin':
+            return 'ARC_SINE(' + self.visit(n.args) + ')'
+        
+        elif func_name == 'acos':
+            return 'ARC_COSINE(' + self.visit(n.args) + ')'
+        
+        elif func_name == 'atan':
+            return 'ARC_TANGENT(' + self.visit(n.args) + ')'
+        
+        elif func_name == 'atan2':
+            return 'ARC_TANGENT2(' + self.visit(n.args) + ')'
+
         # Default case - normal function call
         return fref + '(' + self.visit(n.args) + ')'
 
     def visit_UnaryOp(self, n):
         if n.op == 'sizeof':
-            # Always parenthesize the argument of sizeof since it can be
-            # a name.
-            return 'sizeof(%s)' % self.visit(n.expr)
+            return 'SIZE_OF(%s)' % self.visit(n.expr)
         else:
             operand = self._parenthesize_unless_simple(n.expr)
             if n.op == 'p++':
@@ -383,6 +530,14 @@ class PseudocodeGenerator(object):
                 return operand + ' := ' + operand + ' - 1'
             elif n.op == '!':
                 return 'NOT ' + operand
+            elif n.op == '~':
+                return 'BITWISE_NOT ' + operand
+            elif n.op == '&':
+                # address-of: strip silently, pseudocode readers don't care about addresses
+                return self.visit(n.expr)
+            elif n.op == '*':
+                # dereference: strip silently, accessing the value is implicit in pseudocode
+                return self.visit(n.expr)
             else:
                 return '%s%s' % (n.op, operand)
 
@@ -438,6 +593,18 @@ class PseudocodeGenerator(object):
             op = 'EQUALS'
         elif n.op == '!=':
             op = 'NOT EQUALS'
+        elif n.op == '&':
+            op = 'BITWISE_AND'
+        elif n.op == '|':
+            op = 'BITWISE_OR'
+        elif n.op == '^':
+            op = 'BITWISE_XOR'
+        elif n.op == '>>':
+            op = 'SHIFT_RIGHT'
+        elif n.op == '<<':
+            op = 'SHIFT_LEFT'
+        elif n.op == '%':
+            op = 'MOD'
         return '%s %s %s' % (lval_str, op, rval_str)
 
     def visit_Assignment(self, n):
