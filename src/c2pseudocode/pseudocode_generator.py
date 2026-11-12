@@ -618,26 +618,33 @@ class PseudocodeGenerator(object):
     }
 
     def visit_Assignment(self, n):
+        lval_str = self.visit(n.lvalue)
         rval_str = self._parenthesize_if(
                             n.rvalue,
                             lambda n: isinstance(n, pycparser.c_ast.Assignment))
+        if n.op != '=' and not isinstance(n.lvalue, pycparser.c_ast.ID):
+            return '%s %s %s' % (lval_str, n.op, rval_str)
         if n.op == '+=':
-            return '%s := %s + %s' % (self.visit(n.lvalue), self.visit(n.lvalue), rval_str)
+            rval_str = self._parenthesize_unless_simple(n.rvalue)
+            return '%s := %s + %s' % (lval_str, lval_str, rval_str)
         elif n.op == '-=':
-            return '%s := %s - %s' % (self.visit(n.lvalue), self.visit(n.lvalue), rval_str)
+            rval_str = self._parenthesize_unless_simple(n.rvalue)
+            return '%s := %s - %s' % (lval_str, lval_str, rval_str)
         elif n.op == '*=':
-            return '%s := %s * %s' % (self.visit(n.lvalue), self.visit(n.lvalue), rval_str)
+            rval_str = self._parenthesize_unless_simple(n.rvalue)
+            return '%s := %s * %s' % (lval_str, lval_str, rval_str)
         elif n.op == '/=':
-            return '%s := %s / %s' % (self.visit(n.lvalue), self.visit(n.lvalue), rval_str)
+            rval_str = self._parenthesize_unless_simple(n.rvalue)
+            return '%s := %s / %s' % (lval_str, lval_str, rval_str)
         elif n.op == '=':
-            return '%s := %s' % (self.visit(n.lvalue), rval_str)
+            return '%s := %s' % (lval_str, rval_str)
         elif n.op in self.COMPOUND_ASSIGNMENT_KEYWORDS:
             rval_str = self._parenthesize_unless_simple(n.rvalue)
             return '%s := %s %s %s' % (
-                self.visit(n.lvalue), self.visit(n.lvalue),
+                lval_str, lval_str,
                 self.COMPOUND_ASSIGNMENT_KEYWORDS[n.op], rval_str)
 
-        return '%s %s %s' % (self.visit(n.lvalue), n.op, rval_str)
+        return '%s %s %s' % (lval_str, n.op, rval_str)
 
     def visit_IdentifierType(self, n):
         return ' '.join(n.names)
@@ -1114,7 +1121,7 @@ class PseudocodeGenerator(object):
                 body = self._generate_stmt(pycparser.c_ast.EmptyStatement(), add_indent=True)
             s += body
             if (stmts and not is_last and
-                    not isinstance(self._last_statement(stmts[-1]), self._CASE_TERMINATORS)):
+                    not self._case_statement_terminates(stmts[-1])):
                 self.indent_level += 2
                 s += self._make_indent() + '-- FALLS THROUGH to the next WHEN branch\n'
                 self.indent_level -= 2
@@ -1126,6 +1133,16 @@ class PseudocodeGenerator(object):
         while isinstance(n, pycparser.c_ast.Compound) and n.block_items:
             n = n.block_items[-1]
         return n
+
+    def _case_statement_terminates(self, n):
+        n = self._last_statement(n)
+        if isinstance(n, self._CASE_TERMINATORS):
+            return True
+        if isinstance(n, pycparser.c_ast.If):
+            return (n.iffalse is not None and
+                    self._case_statement_terminates(n.iftrue) and
+                    self._case_statement_terminates(n.iffalse))
+        return False
 
     def visit_Case(self, n):
         # Only reached for a case label outside a plain switch body

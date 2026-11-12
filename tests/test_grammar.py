@@ -627,6 +627,13 @@ class TestSwitchFallThrough:
             "int f(int v) { switch (v) { case 1: return 4; default: return 5; } }")
         assert "FALLS THROUGH" not in result
 
+    def test_if_with_terminating_arms_does_not_fall_through(self):
+        result = convert_c_string_to_pseudocode(
+            "int f(int v, int flag) { switch (v) { "
+            "case 1: if (flag) return 1; else return 2; "
+            "case 2: return 3; } return 0; }")
+        assert "FALLS THROUGH" not in result
+
     def test_empty_branch(self):
         result = convert_c_string_to_pseudocode(
             "void f(int v) { switch (v) { case 1: v = 0; break; default: break; } }")
@@ -652,6 +659,17 @@ class TestSmallRenderingFixes:
     def test_compound_assignment_parenthesizes_rvalue(self):
         result = convert_c_string_to_pseudocode("void f(int x, int y) { x %= y + 1; }")
         assert "x := x MOD (y + 1)" in result
+
+    def test_compound_assignment_evaluates_effectful_lvalue_once(self):
+        result = convert_c_string_to_pseudocode(
+            "int next_index(void); "
+            "void f(void) { int values[3]; values[next_index()] %= 3; }")
+        assert "values[next_index()] %= 3" in result
+
+    def test_arithmetic_compound_assignment_parenthesizes_cast_expression(self):
+        result = convert_c_string_to_pseudocode(
+            "void f(int x, int a, int b) { x *= (int)(a + b); }")
+        assert "x := x * (a + b)" in result
 
     def test_char_is_character(self):
         result = convert_c_string_to_pseudocode("void f() { char c = 'a'; }")
