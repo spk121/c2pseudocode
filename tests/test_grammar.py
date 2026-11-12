@@ -531,3 +531,153 @@ class TestMultipleDeclarations:
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+
+
+def _body(result):
+    """Return the output lines with surrounding whitespace stripped."""
+    return [line.strip() for line in result.splitlines() if line.strip()]
+
+
+class TestCountingLoopRanges:
+    """Test the range notation of recognized counting loops."""
+
+    def _loop(self, header):
+        return convert_c_string_to_pseudocode(
+            "void f() { int i; int s; for (%s) { s += i; } }" % header)
+
+    def test_ascending_exclusive(self):
+        assert "FOR i IN RANGE [0, 10) LOOP" in self._loop("i = 0; i < 10; i++")
+
+    def test_ascending_inclusive(self):
+        assert "FOR i IN RANGE [0, 10] LOOP" in self._loop("i = 0; i <= 10; i++")
+
+    def test_descending_inclusive(self):
+        # i takes the values 5, 4, ..., 0: both bounds are included
+        assert "FOR i IN REVERSE RANGE [0, 5] LOOP" in self._loop("i = 5; i >= 0; i--")
+
+    def test_descending_exclusive(self):
+        # i takes the values 5, 4, ..., 1: the low bound is excluded
+        assert "FOR i IN REVERSE RANGE (0, 5] LOOP" in self._loop("i = 5; i > 0; i--")
+
+    def test_descending_step(self):
+        assert "FOR i IN REVERSE RANGE (0, 10] STEP 2 LOOP" in self._loop("i = 10; i > 0; i -= 2")
+
+    def test_infinite_for(self):
+        result = convert_c_string_to_pseudocode("void f() { for (;;) { break; } }")
+        assert _body(result)[2:5] == ["LOOP", "EXIT", "END LOOP"]
+
+    def test_for_with_only_condition(self):
+        result = convert_c_string_to_pseudocode("void f(int n) { for (; n;) { n--; } }")
+        assert "WHILE n LOOP" in result
+
+
+class TestElseIfChains:
+    """Test else-if chains and unbraced nested statements."""
+
+    def test_elsif(self):
+        result = convert_c_string_to_pseudocode(
+            "void f(int x) { if (x > 0) { x = 1; } else if (x < 0) { x = 2; } else { x = 3; } }")
+        assert result.splitlines()[2:9] == [
+            "  IF x > 0 THEN",
+            "    x := 1",
+            "  ELSIF x < 0 THEN",
+            "    x := 2",
+            "  ELSE",
+            "    x := 3",
+            "  END IF",
+        ]
+
+    def test_unbraced_nested_statements_are_indented(self):
+        result = convert_c_string_to_pseudocode(
+            "void f(int x) { while (x) if (x > 2) x = 1; else x = 2; }")
+        assert result.splitlines()[2:8] == [
+            "  WHILE x LOOP",
+            "    IF x > 2 THEN",
+            "      x := 1",
+            "    ELSE",
+            "      x := 2",
+            "    END IF",
+        ]
+
+
+class TestSwitchFallThrough:
+    """Test switch statements whose cases share code."""
+
+    def test_empty_labels_are_merged(self):
+        result = convert_c_string_to_pseudocode(
+            "void f(int v) { switch (v) { case 1: case 2: v = 0; break; default: v = 9; break; } }")
+        assert "WHEN 1 | 2 =>" in result
+        assert "FALLS THROUGH" not in result
+        assert "EXIT" not in result
+
+    def test_fall_through_is_marked(self):
+        result = convert_c_string_to_pseudocode(
+            "void f(int v) { switch (v) { case 1: v = 0; case 2: v = 5; break; } }")
+        lines = _body(result)
+        i = lines.index("WHEN 1 =>")
+        assert lines[i:i + 4] == [
+            "WHEN 1 =>",
+            "v := 0",
+            "-- FALLS THROUGH to the next WHEN branch",
+            "WHEN 2 =>",
+        ]
+
+    def test_return_does_not_fall_through(self):
+        result = convert_c_string_to_pseudocode(
+            "int f(int v) { switch (v) { case 1: return 4; default: return 5; } }")
+        assert "FALLS THROUGH" not in result
+
+    def test_empty_branch(self):
+        result = convert_c_string_to_pseudocode(
+            "void f(int v) { switch (v) { case 1: v = 0; break; default: break; } }")
+        lines = _body(result)
+        assert lines[lines.index("WHEN OTHERS =>") + 1] == "DO_NOTHING"
+
+
+class TestSmallRenderingFixes:
+    """Test assorted operator, type and constant renderings."""
+
+    @pytest.mark.parametrize("op, keyword", [
+        ("%=", "MOD"),
+        ("&=", "BITWISE_AND"),
+        ("|=", "BITWISE_OR"),
+        ("^=", "BITWISE_XOR"),
+        ("<<=", "SHIFT_LEFT"),
+        (">>=", "SHIFT_RIGHT"),
+    ])
+    def test_compound_assignment(self, op, keyword):
+        result = convert_c_string_to_pseudocode("void f(int x) { x %s 3; }" % op)
+        assert "x := x %s 3" % keyword in result
+
+    def test_compound_assignment_parenthesizes_rvalue(self):
+        result = convert_c_string_to_pseudocode("void f(int x, int y) { x %= y + 1; }")
+        assert "x := x MOD (y + 1)" in result
+
+    def test_char_is_character(self):
+        result = convert_c_string_to_pseudocode("void f() { char c = 'a'; }")
+        assert "c : Character := 'a'" in result
+
+    def test_char_pointer_and_array_are_strings(self):
+        result = convert_c_string_to_pseudocode("void f(char *s) { char buf[8]; }")
+        assert "s : String" in result
+        assert "buf[8] : String" in result
+
+    def test_null_pointer_constant(self):
+        result = convert_c_string_to_pseudocode(
+            "void f(int *p) { if (p != ((void *)0)) { p = ((void *)0); } }")
+        assert "IF p NOT EQUALS NULL THEN" in result
+        assert "p := NULL" in result
+
+    def test_cast_adds_no_parentheses(self):
+        result = convert_c_string_to_pseudocode(
+            "double f(double d, long n) { return d + (double)n; }")
+        assert "RETURN d + n" in result
+
+    def test_cast_of_expression_keeps_grouping(self):
+        result = convert_c_string_to_pseudocode(
+            "int f(int a, int b) { return a * (int)(a + b); }")
+        assert "RETURN a * (a + b)" in result
+
+    def test_plain_typedef(self):
+        result = convert_c_string_to_pseudocode("typedef unsigned long ulong_t;")
+        assert result.strip() == "TYPE ulong_t IS unsigned long"

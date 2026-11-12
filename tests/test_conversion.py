@@ -203,6 +203,55 @@ class TestOnlyFromFile:
             # Filtered version should be shorter or equal
             assert len(result_filtered) <= len(result_full)
 
+    def test_types_from_headers(self):
+        """Code using header-declared types (size_t, FILE) must still parse."""
+        result = convert_c_file_to_pseudocode(
+            str(FIXTURES_DIR / "t_header_types.c"), only_from_file=True)
+        assert result.startswith(
+            "FUNCTION count_chars(fp : FILE, prefix : String) RETURN size_t IS")
+        assert "n : size_t := STRING_LENGTH(prefix)" in result
+        # Nothing declared by the headers themselves is emitted
+        assert result.count("FUNCTION") == 2  # FUNCTION ... END FUNCTION
+        assert "TYPE" not in result
+
+    def test_relative_path(self, monkeypatch):
+        """Filtering must work when the file is given by a relative path."""
+        monkeypatch.chdir(FIXTURES_DIR)
+        result = convert_c_file_to_pseudocode("t_main_no_args.c", only_from_file=True)
+        assert "FUNCTION main() RETURN Integer IS" in result
+
+
+class TestCommandLine:
+    """Test the command-line interface."""
+
+    def _run(self, *args):
+        import subprocess
+        import sys
+        return subprocess.run(
+            [sys.executable, "-m", "c2pseudocode", *args],
+            capture_output=True, text=True)
+
+    def test_missing_file_reports_short_error(self):
+        proc = self._run("/nonexistent/file.c")
+        assert proc.returncode == 1
+        assert "No such file" in proc.stderr
+        assert "-D__builtin_va_list" not in proc.stderr
+
+    def test_help_uses_program_name(self):
+        proc = self._run("--help")
+        assert proc.stdout.startswith("usage: c2pseudocode ")
+
+    def test_no_cpp_does_not_preprocess(self, tmp_path):
+        source = tmp_path / "plain.c"
+        source.write_text("int add(int a, int b) { return a + b; }\n")
+        proc = self._run(str(source), "--no-cpp")
+        assert proc.returncode == 0
+        assert "FUNCTION add(a : Integer, b : Integer) RETURN Integer IS" in proc.stdout
+
+        # A directive proves the preprocessor was not run
+        source.write_text("#define N 1\nint n = N;\n")
+        assert self._run(str(source), "--no-cpp").returncode == 1
+
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

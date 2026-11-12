@@ -18,12 +18,12 @@ class PseudocodeGenerator(object):
     # Type name mappings from C to pseudocode
     TYPE_MAPPINGS = {
         'int': 'Integer',
-        'char': 'String',
+        'char': 'Character',
         'double': 'Float64'
     }
     
     def __init__(self, reduce_parentheses=False):
-        """ Constructs C-code generator
+        """ Constructs pseudocode generator
 
             reduce_parentheses:
                 if True, eliminates needless parentheses on binary operators
@@ -607,6 +607,16 @@ class PseudocodeGenerator(object):
             op = 'MOD'
         return '%s %s %s' % (lval_str, op, rval_str)
 
+    # Compound assignments that expand to a keyword operator
+    COMPOUND_ASSIGNMENT_KEYWORDS = {
+        '%=': 'MOD',
+        '&=': 'BITWISE_AND',
+        '|=': 'BITWISE_OR',
+        '^=': 'BITWISE_XOR',
+        '<<=': 'SHIFT_LEFT',
+        '>>=': 'SHIFT_RIGHT',
+    }
+
     def visit_Assignment(self, n):
         rval_str = self._parenthesize_if(
                             n.rvalue,
@@ -621,7 +631,12 @@ class PseudocodeGenerator(object):
             return '%s := %s / %s' % (self.visit(n.lvalue), self.visit(n.lvalue), rval_str)
         elif n.op == '=':
             return '%s := %s' % (self.visit(n.lvalue), rval_str)
-            
+        elif n.op in self.COMPOUND_ASSIGNMENT_KEYWORDS:
+            rval_str = self._parenthesize_unless_simple(n.rvalue)
+            return '%s := %s %s %s' % (
+                self.visit(n.lvalue), self.visit(n.lvalue),
+                self.COMPOUND_ASSIGNMENT_KEYWORDS[n.op], rval_str)
+
         return '%s %s %s' % (self.visit(n.lvalue), n.op, rval_str)
 
     def visit_IdentifierType(self, n):
@@ -669,11 +684,13 @@ class PseudocodeGenerator(object):
                 elif isinstance(inner_type, pycparser.c_ast.Enum):
                     return self._generate_struct_union_enum_with_name(inner_type, 'enum', type_name)
         
-        # Otherwise, fall back to standard handling
-        s = ''
-        if n.storage: s += ' '.join(n.storage) + ' '
-        s += self._generate_type(n.type)
-        return s
+        # Otherwise, render as "TYPE name IS underlying-type"
+        s = self._generate_type(n.type)
+        prefix = n.name + ' : '
+        if s.startswith(prefix):
+            return 'TYPE ' + n.name + ' IS ' + s[len(prefix):].strip()
+        # Array and function typedefs keep their declarator form
+        return 'TYPE ' + s.strip()
     
     def _generate_struct_union_enum_with_name(self, n, name, type_name):
         """ Generate struct/union/enum with an explicit type name (for typedef) """
@@ -700,8 +717,20 @@ class PseudocodeGenerator(object):
 
     def visit_Cast(self, n):
         "No need to render typecasts in pseudocode"
-        s = '(' + self._generate_type(n.to_type, emit_declname=False) + ')'
-        return self._parenthesize_unless_simple(n.expr)
+        if self._is_null_pointer_cast(n):
+            # The usual expansion of NULL: ((void *)0)
+            return 'NULL'
+        # Callers parenthesize the operand when needed (see _is_simple_node)
+        return self._visit_expr(n.expr)
+
+    def _is_null_pointer_cast(self, n):
+        to_type = n.to_type.type if isinstance(n.to_type, pycparser.c_ast.Typename) else None
+        return (isinstance(to_type, pycparser.c_ast.PtrDecl) and
+                isinstance(to_type.type, pycparser.c_ast.TypeDecl) and
+                isinstance(to_type.type.type, pycparser.c_ast.IdentifierType) and
+                to_type.type.type.names == ['void'] and
+                isinstance(n.expr, pycparser.c_ast.Constant) and
+                n.expr.value == '0')
 
     def visit_ExprList(self, n):
         visited_subexprs = []
@@ -844,9 +873,17 @@ class PseudocodeGenerator(object):
         if n.cond: s += self.visit(n.cond)
         s += ' THEN\n'
         s += self._generate_stmt(n.iftrue, add_indent=True)
-        if n.iffalse:
+        # Flatten "else if" chains into ELSIF branches
+        tail = n.iffalse
+        while isinstance(tail, pycparser.c_ast.If):
+            s += self._make_indent() + 'ELSIF '
+            if tail.cond: s += self.visit(tail.cond)
+            s += ' THEN\n'
+            s += self._generate_stmt(tail.iftrue, add_indent=True)
+            tail = tail.iffalse
+        if tail:
             s += self._make_indent() + 'ELSE\n'
-            s += self._generate_stmt(n.iffalse, add_indent=True)
+            s += self._generate_stmt(tail, add_indent=True)
         s += self._make_indent() +'END IF\n'
         return s
 
@@ -859,6 +896,13 @@ class PseudocodeGenerator(object):
         if simple_loop:
             return simple_loop
         
+        # for (;;) is an infinite loop; for (; cond;) is a while loop
+        if not n.init and not n.next:
+            s = 'WHILE ' + self.visit(n.cond) + ' LOOP\n' if n.cond else 'LOOP\n'
+            s += self._generate_stmt(n.stmt, add_indent=True)
+            s += self._make_indent() + 'END LOOP\n'
+            return s
+
         # Otherwise, use C-style for loop format
         init_str = self.visit(n.init) if n.init else ''
         cond_str = self.visit(n.cond) if n.cond else ''
@@ -889,6 +933,7 @@ class PseudocodeGenerator(object):
         - for (i = start; i <= end; i++)
         - for (i = start; i > end; i--)
         - for (i = start; i >= end; i--)
+        Descending loops are rendered as REVERSE RANGE.
         With optional step values (i += 2, i -= 3, etc.)
         """
         if not n.init or not n.cond or not n.next:
@@ -970,15 +1015,17 @@ class PseudocodeGenerator(object):
             return None
         
         # Generate the simplified loop
-        s = 'FOR ' + loop_var + ' IN RANGE '
-        
-        # Choose bracket notation based on inclusivity
+        # Ranges are always written low bound first. The start value is
+        # always included; the end value only when the comparison is <= or >=.
         if ascending:
+            s = 'FOR ' + loop_var + ' IN RANGE '
             s += '[' + start_val + ', ' + end_val
             s += ']' if inclusive else ')'
         else:
-            # For descending loops, swap order
-            s += '(' if inclusive else '['
+            # Descending loops count down from the high bound, as in
+            # Ada's "for I in reverse Low .. High"
+            s = 'FOR ' + loop_var + ' IN REVERSE RANGE '
+            s += '[' if inclusive else '('
             s += end_val + ', ' + start_val + ']'
         
         # Add step if not 1
@@ -1018,24 +1065,79 @@ class PseudocodeGenerator(object):
 
     def visit_Switch(self, n):
         s = 'CASE ' + self.visit(n.cond) + ' IS\n'
-        s += self._generate_stmt(n.stmt, add_indent=True)
+        if (isinstance(n.stmt, pycparser.c_ast.Compound) and n.stmt.block_items and
+                all(isinstance(item, (pycparser.c_ast.Case, pycparser.c_ast.Default))
+                    for item in n.stmt.block_items)):
+            self.indent_level += 2
+            s += self._generate_switch_branches(n.stmt.block_items)
+            self.indent_level -= 2
+        else:
+            # Unusual switch body; render it as-is
+            s += self._generate_stmt(n.stmt, add_indent=True)
         s += self._make_indent() + 'END CASE\n'
         return s
 
+    # Statements after which control cannot fall into the next case
+    _CASE_TERMINATORS = (pycparser.c_ast.Break, pycparser.c_ast.Return,
+                         pycparser.c_ast.Goto, pycparser.c_ast.Continue)
+
+    def _generate_switch_branches(self, items):
+        """ Generates the WHEN branches of a CASE statement.
+
+            Adjacent empty labels ("case 1: case 2: ...") are merged into a
+            single "WHEN 1 | 2 =>" branch. A branch whose statements run on
+            into the next one is marked, because an Ada-style CASE branch
+            never falls through.
+        """
+        s = ''
+        labels = []
+        for i, item in enumerate(items):
+            if isinstance(item, pycparser.c_ast.Default):
+                labels.append('OTHERS')
+            else:
+                labels.append(self.visit(item.expr))
+            stmts = item.stmts or []
+            is_last = i == len(items) - 1
+            if not stmts and not is_last:
+                # Empty label: shares the next branch's statements
+                continue
+
+            s += self._make_indent() + 'WHEN ' + ' | '.join(labels) + ' =>\n'
+            labels = []
+            body = ''
+            for j, stmt in enumerate(stmts):
+                # A trailing break just ends the branch (implicit in Ada)
+                if isinstance(stmt, pycparser.c_ast.Break) and j == len(stmts) - 1:
+                    continue
+                body += self._generate_stmt(stmt, add_indent=True)
+            if not body:
+                body = self._generate_stmt(pycparser.c_ast.EmptyStatement(), add_indent=True)
+            s += body
+            if (stmts and not is_last and
+                    not isinstance(self._last_statement(stmts[-1]), self._CASE_TERMINATORS)):
+                self.indent_level += 2
+                s += self._make_indent() + '-- FALLS THROUGH to the next WHEN branch\n'
+                self.indent_level -= 2
+            s += '\n'
+        return s
+
+    def _last_statement(self, n):
+        """ Returns the last statement of a (possibly nested) compound. """
+        while isinstance(n, pycparser.c_ast.Compound) and n.block_items:
+            n = n.block_items[-1]
+        return n
+
     def visit_Case(self, n):
+        # Only reached for a case label outside a plain switch body
         s = 'WHEN ' + self.visit(n.expr) + ' =>\n'
-        for stmt in n.stmts:
-            # Skip BREAK statements in case blocks (not needed in ADA)
-            if not isinstance(stmt, pycparser.c_ast.Break):
-                s += self._generate_stmt(stmt, add_indent=True)
+        for stmt in n.stmts or []:
+            s += self._generate_stmt(stmt, add_indent=True)
         return s
 
     def visit_Default(self, n):
         s = 'WHEN OTHERS =>\n'
-        for stmt in n.stmts:
-            # Skip BREAK statements in default blocks (not needed in ADA)
-            if not isinstance(stmt, pycparser.c_ast.Break):
-                s += self._generate_stmt(stmt, add_indent=True)
+        for stmt in n.stmts or []:
+            s += self._generate_stmt(stmt, add_indent=True)
         return s
 
     def visit_Label(self, n):
@@ -1085,7 +1187,7 @@ class PseudocodeGenerator(object):
         if name in ('struct', 'union'):
             members = n.decls
             body_function = self._generate_struct_union_body
-            # Use ADA-style 'RECORD' instead of 'struct'
+            # Use Ada-style 'RECORD' instead of 'struct'
             keyword = 'RECORD' if name == 'struct' else 'UNION'
         else:
             assert name == 'enum'
@@ -1124,30 +1226,24 @@ class PseudocodeGenerator(object):
             some statements in this context.
         """
         typ = type(n)
-        if add_indent: self.indent_level += 2
-        indent = self._make_indent()
-        if add_indent: self.indent_level -= 2
-
-        if typ in (
-                pycparser.c_ast.Decl, pycparser.c_ast.Assignment, pycparser.c_ast.Cast, pycparser.c_ast.UnaryOp,
-                pycparser.c_ast.BinaryOp, pycparser.c_ast.TernaryOp, pycparser.c_ast.FuncCall, pycparser.c_ast.ArrayRef,
-                pycparser.c_ast.StructRef, pycparser.c_ast.Constant, pycparser.c_ast.ID, pycparser.c_ast.Typedef,
-                pycparser.c_ast.ExprList):
-            # These can also appear in an expression context so no semicolon
-            # is added to them automatically
-            #
-            return indent + self.visit(n) + '\n'
-        elif typ in (pycparser.c_ast.Compound,):
-            # No extra indentation required before the opening brace of a
-            # compound - because it consists of multiple lines it has to
-            # compute its own indentation.
-            #
+        if typ is pycparser.c_ast.Compound:
+            # A compound computes its own indentation.
             return self.visit(n)
-        elif typ in (pycparser.c_ast.If,):
-            return indent + self.visit(n)
-        else:
-            return indent + self.visit(n) + '\n'
- 
+
+        # A statement used directly as a loop or branch body (no braces) is
+        # visited at the deeper level, so that its own nested lines and
+        # closing keywords line up with it.
+        if add_indent: self.indent_level += 2
+        try:
+            s = self._make_indent() + self.visit(n)
+        finally:
+            if add_indent: self.indent_level -= 2
+
+        if typ is pycparser.c_ast.If:
+            # visit_If already ends with a newline
+            return s
+        return s + '\n'
+
     def _generate_decl(self, n):
         """ Generation from a Decl node.
         """
@@ -1174,7 +1270,12 @@ class PseudocodeGenerator(object):
             # if n.quals: s += ' '.join(n.quals) + ' '
             s += self.visit(n.type)
 
-            if s in self.TYPE_MAPPINGS:
+            if (s == 'char' and modifiers and
+                    isinstance(modifiers[-1], (pycparser.c_ast.PtrDecl,
+                                               pycparser.c_ast.ArrayDecl))):
+                # char* and char[] are text; a lone char is a single character
+                s = 'String'
+            elif s in self.TYPE_MAPPINGS:
                 s = self.TYPE_MAPPINGS[s]
 
             nstr = n.declname if n.declname and emit_declname else ''
@@ -1245,5 +1346,8 @@ class PseudocodeGenerator(object):
         """ Returns True for nodes that are "simple" - i.e. nodes that always
             have higher precedence than operators.
         """
+        if isinstance(n, pycparser.c_ast.Cast):
+            # Casts are not rendered, so only the operand matters
+            return self._is_null_pointer_cast(n) or self._is_simple_node(n.expr)
         return isinstance(n, (pycparser.c_ast.Constant, pycparser.c_ast.ID, pycparser.c_ast.ArrayRef,
                               pycparser.c_ast.StructRef, pycparser.c_ast.FuncCall))

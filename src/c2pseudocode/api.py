@@ -1,6 +1,5 @@
 """Core API functions for C to pseudocode conversion."""
 
-import tempfile
 import os
 import subprocess
 import pycparser
@@ -40,126 +39,94 @@ def get_default_cpp_args():
 
 def convert_c_string_to_pseudocode(c_code, cpp_args=None):
     """Convert C code string to pseudocode without preprocessing.
-    
+
+    The string is parsed as-is: it must not contain preprocessor directives
+    (#include, #define, ...) and every type it uses must be declared in it.
+
     Args:
         c_code (str): C source code as a string
-        cpp_args (list, optional): List of preprocessor arguments for fake typedefs.
-                                   If None, uses get_default_cpp_args().
-    
+        cpp_args (list, optional): Ignored. The preprocessor is not run on
+                                   strings; the parameter is kept only for
+                                   backward compatibility.
+
     Returns:
         str: Generated pseudocode
-        
+
     Raises:
         pycparser.plyparser.ParseError: If C code has syntax errors
     """
-    if cpp_args is None:
-        cpp_args = get_default_cpp_args()
-    
-    # Write C code to a temporary file
-    with tempfile.NamedTemporaryFile(mode='w', suffix='.c', delete=False) as f:
-        f.write(c_code)
-        temp_file = f.name
-    
-    try:
-        # Parse without preprocessing (code is already plain C)
-        ast = pycparser.parse_file(temp_file, use_cpp=False)
-        
-        # Generate pseudocode
-        generator = PseudocodeGenerator()
-        return generator.visit(ast)
-    finally:
-        os.unlink(temp_file)
+    ast = pycparser.CParser().parse(c_code, filename='<string>')
+    return PseudocodeGenerator().visit(ast)
 
 
 def convert_c_file_to_pseudocode(filename, cpp_args=None, only_from_file=False):
     """Convert a C file to pseudocode with preprocessing.
-    
+
     Args:
         filename (str): Path to C source file
-        cpp_args (list, optional): List of preprocessor arguments. 
+        cpp_args (list, optional): List of preprocessor arguments.
                                    If None, uses get_default_cpp_args().
         only_from_file (bool): If True, only convert code from the specified file,
                               not from included headers. Default is False.
-    
+
     Returns:
         str: Generated pseudocode
-        
+
     Raises:
+        FileNotFoundError: If the file does not exist
         RuntimeError: If preprocessing fails
         pycparser.plyparser.ParseError: If C code has syntax errors
     """
     if cpp_args is None:
         cpp_args = get_default_cpp_args()
-    
-    if only_from_file:
-        # Preprocess and filter to only include code from original file
-        _, filtered_code, _ = _preprocess_and_filter(filename, cpp_args)
-        
-        # Write filtered code to temp file and parse without cpp
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.i', delete=False) as f:
-            f.write(filtered_code)
-            temp_file = f.name
-        
-        try:
-            ast = pycparser.parse_file(temp_file, use_cpp=False)
-        finally:
-            os.unlink(temp_file)
-    else:
-        # Normal parsing with cpp
+
+    if not os.path.isfile(filename):
+        raise FileNotFoundError(f"No such file: {filename}")
+
+    try:
         ast = pycparser.parse_file(filename, use_cpp=True, cpp_args=cpp_args)
-    
+    except subprocess.CalledProcessError as e:
+        raise RuntimeError(
+            f"Preprocessing failed (cpp exited with status {e.returncode})") from e
+    except OSError as e:
+        raise RuntimeError(f"Could not run the C preprocessor 'cpp': {e}") from e
+
+    if only_from_file:
+        # The whole translation unit is parsed, so that types declared in
+        # headers are known, and only then are the header's own declarations
+        # dropped from the output.
+        ast.ext = [ext for ext in ast.ext if _is_from_file(ext, filename)]
+
     # Generate pseudocode
     generator = PseudocodeGenerator()
     return generator.visit(ast)
 
 
-def _preprocess_and_filter(filename, cpp_args):
-    """Preprocess a file and filter to only include lines from the original file.
-    
-    Uses cpp to preprocess, then parses the line markers to identify which
-    lines come from the original file vs. system headers.
-    
+def convert_preprocessed_file_to_pseudocode(filename):
+    """Convert a C file to pseudocode without running the preprocessor.
+
+    Use this for files that are already preprocessed (e.g. the output of
+    ``cpp`` or ``gcc -E``) or that contain no preprocessor directives.
+
+    Args:
+        filename (str): Path to the C source file
+
     Returns:
-        Tuple of (preprocessed_code, filtered_code, line_mapping)
+        str: Generated pseudocode
+
+    Raises:
+        FileNotFoundError: If the file does not exist
+        pycparser.plyparser.ParseError: If C code has syntax errors
     """
-    import re
-    
-    # Get the absolute path to normalize filenames
-    original_file = os.path.abspath(filename)
-    
-    # Run preprocessor
-    try:
-        full_cpp_cmd = ['cpp'] + cpp_args + [filename]
-        preprocessed = subprocess.check_output(
-            full_cpp_cmd,
-            stderr=subprocess.DEVNULL,
-            universal_newlines=True
-        )
-    except subprocess.CalledProcessError as e:
-        raise RuntimeError(f"Preprocessing failed: {e}")
-    
-    lines = preprocessed.split('\n')
-    filtered_lines = []
-    current_file = None
-    line_mapping = []  # Track which lines are from original file
-    
-    # Regex to match preprocessor line markers: # line "filename" [flags]
-    line_marker_re = re.compile(r'^#\s*(\d+)\s+"([^"]+)"')
-    
-    for line in lines:
-        match = line_marker_re.match(line)
-        if match:
-            # Update which file we're currently processing
-            current_file = os.path.abspath(match.group(2))
-            # Don't include the line marker itself in output
-            continue
-        
-        # Only include lines from the original file
-        if current_file == original_file:
-            filtered_lines.append(line)
-            line_mapping.append(True)
-        else:
-            line_mapping.append(False)
-    
-    filtered_code = '\n'.join(filtered_lines)
-    return preprocessed, filtered_code, line_mapping
+    if not os.path.isfile(filename):
+        raise FileNotFoundError(f"No such file: {filename}")
+    ast = pycparser.parse_file(filename, use_cpp=False)
+    return PseudocodeGenerator().visit(ast)
+
+
+def _is_from_file(node, filename):
+    """Return True if an AST node was defined in the given source file."""
+    coord = getattr(node, 'coord', None)
+    if coord is None or not coord.file:
+        return False
+    return os.path.abspath(coord.file) == os.path.abspath(filename)
