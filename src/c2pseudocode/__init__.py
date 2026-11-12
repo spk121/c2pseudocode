@@ -1,12 +1,13 @@
 """C to Pseudocode Converter
 
-A tool to convert C source code to ADA-like pseudocode for documentation purposes.
+A tool to convert C source code to Ada-like pseudocode for documentation purposes.
 """
 
 from .pseudocode_generator import PseudocodeGenerator
 from .api import (
     convert_c_string_to_pseudocode,
     convert_c_file_to_pseudocode,
+    convert_preprocessed_file_to_pseudocode,
     get_default_cpp_args,
 )
 
@@ -15,5 +16,6 @@ __all__ = [
     "PseudocodeGenerator",
     "convert_c_string_to_pseudocode",
     "convert_c_file_to_pseudocode",
+    "convert_preprocessed_file_to_pseudocode",
     "get_default_cpp_args",
 ]
