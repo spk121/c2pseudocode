@@ -472,7 +472,7 @@ class TestBreakContinue:
             }
         }
         """)
-        # Break is converted to EXIT in ADA-like pseudocode
+        # Break is converted to EXIT in Ada-like pseudocode
         assert "EXIT" in result or "BREAK" in result or "break" in result.lower()
         assert "i" in result
     

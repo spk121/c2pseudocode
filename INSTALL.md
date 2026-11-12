@@ -1,8 +1,14 @@
 # Installation and Usage Guide
 
+## Requirements
+
+- Python 3.7 or higher
+- [pycparser](https://github.com/eliben/pycparser) (installed automatically by `pip`)
+- A C preprocessor available as `cpp` on the `PATH` (part of GCC and Clang installations). It is not needed for `--no-cpp` or for converting strings through the Python API.
+
 ## Installation
 
-### From Source (Development)
+### From Source
 
 ```bash
 # Clone the repository
@@ -16,15 +22,30 @@ pip install -e .
 pip install -e ".[dev]"
 ```
 
-### Using pip (when published)
+The package is not published on PyPI.
+
+### Without Installing
+
+`c2pseudocode.sh` runs the tool straight from the source tree. Only the dependency needs to be installed:
 
 ```bash
-pip install c2pseudocode
+pip install pycparser
+./c2pseudocode.sh myfile.c
 ```
 
 ## Command Line Usage
 
-### Basic Usage
+```
+c2pseudocode [-h] [-o OUTPUT] [--no-cpp] [--only-from-file] input
+```
+
+| Option | Meaning |
+|--------|---------|
+| `input` | The C file to convert |
+| `-o OUTPUT`, `--output OUTPUT` | Write the pseudocode to `OUTPUT` instead of stdout |
+| `--only-from-file` | Only generate pseudocode for code in the input file itself, not for the headers it includes |
+| `--no-cpp` | Do not run the C preprocessor. The input must be already preprocessed, or contain no preprocessor directives |
+| `-h`, `--help` | Show the help message |
 
 ```bash
 # Convert a C file to pseudocode
@@ -33,18 +54,17 @@ c2pseudocode myfile.c
 # Save to a file
 c2pseudocode myfile.c -o output.txt
 
-# Filter out system headers (recommended for files with includes)
+# Leave out the contents of headers (recommended for files with includes)
 c2pseudocode myfile.c --only-from-file
 
-# Without preprocessing
+# Already preprocessed input
 c2pseudocode preprocessed.i --no-cpp
-```
 
-### Using as a Python Module
-
-```bash
+# Run as a Python module
 python3 -m c2pseudocode myfile.c
 ```
+
+On failure, an error message is written to stderr and the exit status is 1.
 
 ## Python API
 
@@ -69,7 +89,7 @@ Output:
 ```
 FUNCTION factorial(n : Integer) RETURN Integer IS
 BEGIN
-  IF n LESS_EQUAL 1 THEN
+  IF n <= 1 THEN
     RETURN 1
   END IF
   RETURN n * factorial(n - 1)
@@ -105,10 +125,76 @@ cpp_args = get_default_cpp_args()
 cpp_args.extend([
     "-DMY_DEFINE=1",
     "-DDEBUG",
+    "-Iinclude",
 ])
 
 pseudocode = convert_c_file_to_pseudocode("myfile.c", cpp_args=cpp_args)
 ```
+
+If you pass your own `cpp_args`, start from `get_default_cpp_args()` as shown: the defaults are what make GCC-specific constructs such as `__attribute__` parseable.
+
+## API Reference
+
+### `convert_c_string_to_pseudocode(c_code, cpp_args=None)`
+
+Convert a C code string to pseudocode. The preprocessor is not run: the string must not contain directives such as `#include` or `#define`, and every type it uses must be declared in it.
+
+**Parameters:**
+- `c_code` (str): C source code as a string
+- `cpp_args`: Ignored. Kept only for backward compatibility
+
+**Returns:** str - Generated pseudocode
+
+**Raises:** `pycparser.c_parser.ParseError` if C code has syntax errors
+
+### `convert_c_file_to_pseudocode(filename, cpp_args=None, only_from_file=False)`
+
+Convert a C file to pseudocode, running the C preprocessor on it first.
+
+**Parameters:**
+- `filename` (str): Path to C source file
+- `cpp_args` (list, optional): Preprocessor arguments. Defaults to `get_default_cpp_args()`
+- `only_from_file` (bool): Only convert code from the file itself, not from the headers it includes
+
+**Returns:** str - Generated pseudocode
+
+**Raises:**
+- `FileNotFoundError` if the file does not exist
+- `RuntimeError` if preprocessing fails
+- `pycparser.c_parser.ParseError` if C code has syntax errors
+
+### `convert_preprocessed_file_to_pseudocode(filename)`
+
+Convert a C file to pseudocode without running the preprocessor. This is what `--no-cpp` uses.
+
+**Parameters:**
+- `filename` (str): Path to a C source file that is already preprocessed or contains no directives
+
+**Returns:** str - Generated pseudocode
+
+**Raises:**
+- `FileNotFoundError` if the file does not exist
+- `pycparser.c_parser.ParseError` if C code has syntax errors
+
+### `get_default_cpp_args()`
+
+Get the default C preprocessor arguments, which define away GCC built-ins and extensions that the parser does not understand.
+
+**Returns:** list - List of cpp argument strings
+
+### `PseudocodeGenerator(reduce_parentheses=False)`
+
+The AST visitor that produces the pseudocode. Use it directly to convert a `pycparser` AST you have built yourself:
+
+```python
+import pycparser
+from c2pseudocode import PseudocodeGenerator
+
+ast = pycparser.CParser().parse("int f(int a, int b, int c) { return (a + b) * c - a * b; }")
+print(PseudocodeGenerator(reduce_parentheses=True).visit(ast))
+```
+
+By default every nested binary operation is parenthesized, giving `((a + b) * c) - (a * b)`. With `reduce_parentheses=True`, parentheses that operator precedence makes unnecessary are omitted, giving `(a + b) * c - a * b`.
 
 ## Development
 
@@ -128,61 +214,9 @@ pytest --cov=c2pseudocode --cov-report=html
 pytest tests/test_conversion.py::TestStringConversion -v
 ```
 
-### Project Structure
+`tests/test_docs.py` converts every C example in [CONVERSION.md](CONVERSION.md) and compares the result with the pseudocode shown next to it, so a change in output must be accompanied by a change to that document.
 
-```
-c2pseudocode/
-├── src/c2pseudocode/           # Main package
-│   ├── __init__.py            # Public API
-│   ├── __main__.py            # CLI entry point
-│   ├── api.py                 # Core conversion functions
-│   └── pseudocode_generator.py # AST visitor
-├── tests/                     # Test suite
-│   ├── fixtures/              # Test C files
-│   │   ├── t_for_loops.c
-│   │   ├── t_func_trivial.c
-│   │   └── ...
-│   └── test_conversion.py     # Pytest tests
-├── tools/unifdef/             # unifdef C utility
-├── pyproject.toml             # Package configuration
-├── requirements.txt           # Dependencies
-└── README.md                  # Documentation
-```
-
-## API Reference
-
-### `convert_c_string_to_pseudocode(c_code, cpp_args=None)`
-
-Convert C code string to pseudocode without preprocessing.
-
-**Parameters:**
-- `c_code` (str): C source code as a string
-- `cpp_args` (list, optional): Preprocessor arguments for fake typedefs
-
-**Returns:** str - Generated pseudocode
-
-**Raises:** `pycparser.plyparser.ParseError` if C code has syntax errors
-
-### `convert_c_file_to_pseudocode(filename, cpp_args=None, only_from_file=False)`
-
-Convert a C file to pseudocode with preprocessing.
-
-**Parameters:**
-- `filename` (str): Path to C source file
-- `cpp_args` (list, optional): Preprocessor arguments
-- `only_from_file` (bool): Only convert code from the file, not headers
-
-**Returns:** str - Generated pseudocode
-
-**Raises:** 
-- `RuntimeError` if preprocessing fails
-- `pycparser.plyparser.ParseError` if C code has syntax errors
-
-### `get_default_cpp_args()`
-
-Get default C preprocessor arguments for GCC built-ins.
-
-**Returns:** list - List of cpp argument strings
+The project layout is described in [README.md](README.md#project-structure).
 
 ## Building unifdef
 
