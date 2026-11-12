@@ -53,7 +53,7 @@ def convert_c_string_to_pseudocode(c_code, cpp_args=None):
         str: Generated pseudocode
 
     Raises:
-        pycparser.plyparser.ParseError: If C code has syntax errors
+        pycparser.c_parser.ParseError: If C code has syntax errors
     """
     ast = pycparser.CParser().parse(c_code, filename='<string>')
     return PseudocodeGenerator().visit(ast)
@@ -75,7 +75,7 @@ def convert_c_file_to_pseudocode(filename, cpp_args=None, only_from_file=False):
     Raises:
         FileNotFoundError: If the file does not exist
         RuntimeError: If preprocessing fails
-        pycparser.plyparser.ParseError: If C code has syntax errors
+        pycparser.c_parser.ParseError: If C code has syntax errors
     """
     if cpp_args is None:
         cpp_args = get_default_cpp_args()
@@ -116,7 +116,7 @@ def convert_preprocessed_file_to_pseudocode(filename):
 
     Raises:
         FileNotFoundError: If the file does not exist
-        pycparser.plyparser.ParseError: If C code has syntax errors
+        pycparser.c_parser.ParseError: If C code has syntax errors
     """
     if not os.path.isfile(filename):
         raise FileNotFoundError(f"No such file: {filename}")
